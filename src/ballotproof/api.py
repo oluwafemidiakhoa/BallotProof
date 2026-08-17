@@ -60,10 +60,11 @@ SourceType = Literal[
 
 app = FastAPI(
     title="BallotProof API",
-    version="0.11.0",
+    version="0.12.0",
     description=(
         "Evidence-preserving primitives for election verification, including versioned election "
-        "registries, source governance, immutable evidence, review, attestations, and replay."
+        "registries, source governance, automatic acquisition, immutable evidence, review, "
+        "attestations, and replay."
     ),
 )
 app.include_router(source_router)
