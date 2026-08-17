@@ -33,6 +33,12 @@ from ballotproof.models import (
     ValidationReport,
 )
 from ballotproof.reconciliation import reconcile_totals
+from ballotproof.registry import (
+    ElectionRegistryPayload,
+    ElectionRegistrySnapshot,
+    ElectionRegistryStore,
+    RegistryChainVerification,
+)
 from ballotproof.storage import EvidenceStore
 from ballotproof.validation import validate_result_sheet
 
@@ -48,10 +54,10 @@ SourceType = Literal[
 
 app = FastAPI(
     title="BallotProof API",
-    version="0.5.0",
+    version="0.6.0",
     description=(
-        "Evidence-preserving primitives for election verification. BallotProof stores source "
-        "artifacts, exposes provenance, and keeps machine extraction separate from human review."
+        "Evidence-preserving primitives for election verification, including versioned election "
+        "registry snapshots, immutable evidence, review, attestations, and collation replay."
     ),
 )
 
@@ -60,6 +66,12 @@ app = FastAPI(
 def get_store() -> EvidenceStore:
     root = Path(os.environ.get("BALLOTPROOF_DATA_DIR", ".ballotproof-data"))
     return EvidenceStore(root)
+
+
+@lru_cache
+def get_registry_store() -> ElectionRegistryStore:
+    root = Path(os.environ.get("BALLOTPROOF_DATA_DIR", ".ballotproof-data"))
+    return ElectionRegistryStore(root)
 
 
 @app.get("/health", tags=["system"])
@@ -77,11 +89,7 @@ def reconcile(request: ReconciliationRequest) -> ReconciliationReport:
     return reconcile_totals(request)
 
 
-@app.post(
-    "/v1/collation/replay",
-    response_model=CollationReplayReport,
-    tags=["verification"],
-)
+@app.post("/v1/collation/replay", response_model=CollationReplayReport, tags=["verification"])
 def replay_collation_endpoint(request: CollationReplayRequest) -> CollationReplayReport:
     return replay_collation(request)
 
@@ -95,22 +103,62 @@ def replay_collation_graph_endpoint(request: CollationGraphRequest) -> Collation
     return replay_collation_graph(request)
 
 
+@app.post(
+    "/v1/registry/snapshots",
+    response_model=ElectionRegistrySnapshot,
+    tags=["registry"],
+)
+def append_registry_snapshot(payload: ElectionRegistryPayload) -> ElectionRegistrySnapshot:
+    return get_registry_store().append(payload)
+
+
+@app.get(
+    "/v1/registry/{election_id}",
+    response_model=ElectionRegistrySnapshot,
+    tags=["registry"],
+)
+def latest_registry_snapshot(election_id: str) -> ElectionRegistrySnapshot:
+    try:
+        return get_registry_store().latest(election_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get(
+    "/v1/registry/{election_id}/history",
+    response_model=list[ElectionRegistrySnapshot],
+    tags=["registry"],
+)
+def registry_history(election_id: str) -> list[ElectionRegistrySnapshot]:
+    history = get_registry_store().history(election_id)
+    if not history:
+        raise HTTPException(status_code=404, detail="Unknown election_id")
+    return history
+
+
+@app.get(
+    "/v1/registry/{election_id}/chain",
+    response_model=RegistryChainVerification,
+    tags=["registry"],
+)
+def registry_chain(election_id: str) -> RegistryChainVerification:
+    verification = get_registry_store().verify_chain(election_id)
+    if verification.snapshots_checked == 0:
+        raise HTTPException(status_code=404, detail="Unknown election_id")
+    return verification
+
+
 @app.post("/v1/evidence/fingerprint", response_model=EvidenceFingerprint, tags=["evidence"])
-async def fingerprint_evidence(
-    file: Annotated[UploadFile, File()],
-) -> EvidenceFingerprint:
+async def fingerprint_evidence(file: Annotated[UploadFile, File()]) -> EvidenceFingerprint:
     digest = hashlib.sha256()
     size = 0
-
     while chunk := await file.read(CHUNK_SIZE):
         size += len(chunk)
         if size > MAX_EVIDENCE_BYTES:
             raise HTTPException(status_code=413, detail="Evidence file exceeds 25 MiB limit")
         digest.update(chunk)
-
     if size == 0:
         raise HTTPException(status_code=400, detail="Evidence file is empty")
-
     return EvidenceFingerprint(
         sha256=digest.hexdigest(),
         size_bytes=size,
@@ -138,7 +186,6 @@ async def ingest_evidence(
     except ValueError as exc:
         status = 413 if "exceeds" in str(exc) else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
-
     try:
         return store.append_version(
             artifact=artifact,
@@ -171,11 +218,7 @@ def polling_unit_evidence(election_id: str, polling_unit_code: str) -> PollingUn
     return bundle
 
 
-@app.get(
-    "/v1/evidence/{evidence_id}/history",
-    response_model=list[EvidenceVersion],
-    tags=["evidence"],
-)
+@app.get("/v1/evidence/{evidence_id}/history", response_model=list[EvidenceVersion], tags=["evidence"])
 def evidence_history(evidence_id: str) -> list[EvidenceVersion]:
     history = get_store().history(evidence_id)
     if not history:
@@ -183,11 +226,7 @@ def evidence_history(evidence_id: str) -> list[EvidenceVersion]:
     return history
 
 
-@app.get(
-    "/v1/evidence/{evidence_id}/chain",
-    response_model=ChainVerification,
-    tags=["evidence"],
-)
+@app.get("/v1/evidence/{evidence_id}/chain", response_model=ChainVerification, tags=["evidence"])
 def evidence_chain(evidence_id: str) -> ChainVerification:
     verification = get_store().verify_chain(evidence_id)
     if verification.versions_checked == 0:
