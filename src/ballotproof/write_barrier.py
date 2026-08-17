@@ -23,7 +23,10 @@ class ReleaseWriteBarrier:
                 """
             )
             connection.execute(
-                "INSERT OR IGNORE INTO release_write_barrier (singleton, generation) VALUES (1, 0)"
+                """
+                INSERT OR IGNORE INTO release_write_barrier (singleton, generation)
+                VALUES (1, 0)
+                """
             )
 
     def _connect(self) -> sqlite3.Connection:
