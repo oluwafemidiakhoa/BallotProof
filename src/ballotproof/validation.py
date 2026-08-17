@@ -35,17 +35,20 @@ def validate_result_sheet(sheet: ResultSheet) -> ValidationReport:
             )
         )
 
-    if sheet.registered_voters is not None and sheet.accredited_voters is not None:
-        if sheet.accredited_voters > sheet.registered_voters:
-            findings.append(
-                ValidationFinding(
-                    code="ACCREDITED_EXCEEDS_REGISTERED",
-                    severity=Severity.ERROR,
-                    message="Accredited voters exceed registered voters.",
-                    observed=sheet.accredited_voters,
-                    expected=f"<= {sheet.registered_voters}",
-                )
+    if (
+        sheet.registered_voters is not None
+        and sheet.accredited_voters is not None
+        and sheet.accredited_voters > sheet.registered_voters
+    ):
+        findings.append(
+            ValidationFinding(
+                code="ACCREDITED_EXCEEDS_REGISTERED",
+                severity=Severity.ERROR,
+                message="Accredited voters exceed registered voters.",
+                observed=sheet.accredited_voters,
+                expected=f"<= {sheet.registered_voters}",
             )
+        )
 
     if (
         sheet.accredited_voters is not None
@@ -64,7 +67,11 @@ def validate_result_sheet(sheet: ResultSheet) -> ValidationReport:
                 )
             )
 
-    if sheet.votes_cast is not None and sheet.valid_votes is not None and sheet.rejected_votes is not None:
+    if (
+        sheet.votes_cast is not None
+        and sheet.valid_votes is not None
+        and sheet.rejected_votes is not None
+    ):
         expected_votes_cast = sheet.valid_votes + sheet.rejected_votes
         if sheet.votes_cast != expected_votes_cast:
             findings.append(
