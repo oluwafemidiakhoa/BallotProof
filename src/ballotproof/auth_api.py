@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Callable
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -14,8 +15,8 @@ from ballotproof.auth import (
     ApiKeyIssued,
     ApiKeyMetadata,
     ApproverKey,
-    AuthStore,
     AuthenticatedPrincipal,
+    AuthStore,
     Identity,
     Permission,
     Role,
@@ -138,7 +139,11 @@ def update_identity_roles(
     ],
 ) -> Identity:
     try:
-        return get_auth_store().update_roles(actor_id, request.roles, performed_by=principal.actor_id)
+        return get_auth_store().update_roles(
+            actor_id,
+            request.roles,
+            performed_by=principal.actor_id,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (PermissionError, ValueError) as exc:
