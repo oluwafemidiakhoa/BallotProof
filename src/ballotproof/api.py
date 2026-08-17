@@ -39,6 +39,11 @@ from ballotproof.registry import (
     ElectionRegistryStore,
     RegistryChainVerification,
 )
+from ballotproof.registry_replay import (
+    RegistryReplayReport,
+    RegistryReplayRequest,
+    replay_from_registry,
+)
 from ballotproof.storage import EvidenceStore
 from ballotproof.validation import validate_result_sheet
 
@@ -54,10 +59,10 @@ SourceType = Literal[
 
 app = FastAPI(
     title="BallotProof API",
-    version="0.6.0",
+    version="0.7.0",
     description=(
         "Evidence-preserving primitives for election verification, including versioned election "
-        "registry snapshots, immutable evidence, review, attestations, and collation replay."
+        "registries, immutable evidence, human review, attestations, and collation replay."
     ),
 )
 
@@ -101,6 +106,20 @@ def replay_collation_endpoint(request: CollationReplayRequest) -> CollationRepla
 )
 def replay_collation_graph_endpoint(request: CollationGraphRequest) -> CollationGraphReport:
     return replay_collation_graph(request)
+
+
+@app.post(
+    "/v1/collation/replay-registry",
+    response_model=RegistryReplayReport,
+    tags=["verification"],
+)
+def replay_registry_endpoint(request: RegistryReplayRequest) -> RegistryReplayReport:
+    try:
+        return replay_from_registry(get_registry_store(), request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post(
