@@ -1,5 +1,3 @@
-from datetime import UTC, datetime
-
 import pytest
 
 from ballotproof.source_network import PinnedHTTPSStreamingTransport, SourceNetworkError
@@ -77,7 +75,11 @@ def test_transport_pins_validated_dns_address_to_connection():
     )
     result = transport.send(request())
 
-    assert seen == {"host": "api.example.test", "address": "93.184.216.34", "timeout": 5.0}
+    assert seen == {
+        "host": "api.example.test",
+        "address": "93.184.216.34",
+        "timeout": 5.0,
+    }
     assert connection.requests[0][0:2] == ("GET", "/results?event=1")
     assert result.stream.read() == b"{}"
     result.stream.close()

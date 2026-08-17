@@ -113,7 +113,12 @@ def _resolve_public_addresses(host: str, port: int) -> list[str]:
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     def __init__(self, host: str, resolved_ip: str, timeout: float) -> None:
-        super().__init__(host=host, port=443, timeout=timeout, context=ssl.create_default_context())
+        super().__init__(
+            host=host,
+            port=443,
+            timeout=timeout,
+            context=ssl.create_default_context(),
+        )
         self._resolved_ip = resolved_ip
 
     def connect(self) -> None:
