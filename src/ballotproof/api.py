@@ -237,7 +237,11 @@ def polling_unit_evidence(election_id: str, polling_unit_code: str) -> PollingUn
     return bundle
 
 
-@app.get("/v1/evidence/{evidence_id}/history", response_model=list[EvidenceVersion], tags=["evidence"])
+@app.get(
+    "/v1/evidence/{evidence_id}/history",
+    response_model=list[EvidenceVersion],
+    tags=["evidence"],
+)
 def evidence_history(evidence_id: str) -> list[EvidenceVersion]:
     history = get_store().history(evidence_id)
     if not history:
