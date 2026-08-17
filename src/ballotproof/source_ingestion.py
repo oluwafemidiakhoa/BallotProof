@@ -94,6 +94,10 @@ class CaptureRequest(SourceModel):
     attempt: int = Field(default=1, ge=1, le=10)
     request_key: str | None = Field(default=None, min_length=1, max_length=256)
     reservation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    transport_id: str | None = Field(default=None, min_length=1, max_length=256)
+    transport_version: str | None = Field(default=None, min_length=1, max_length=128)
+    transport_config_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    transport_provenance_kind: str | None = Field(default=None, min_length=1, max_length=32)
 
 
 class ProvenanceReceipt(SourceModel):
@@ -110,6 +114,10 @@ class ProvenanceReceipt(SourceModel):
     attempt: int
     request_key: str | None = None
     reservation_id: str | None = None
+    transport_id: str | None = None
+    transport_version: str | None = None
+    transport_config_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    transport_provenance_kind: str | None = None
     raw_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     raw_size_bytes: int = Field(ge=1)
     policy_status: SourceAccessStatus
@@ -217,6 +225,10 @@ class SourceCaptureStore:
                 attempt=request.attempt,
                 request_key=request.request_key,
                 reservation_id=request.reservation_id,
+                transport_id=request.transport_id,
+                transport_version=request.transport_version,
+                transport_config_hash=request.transport_config_hash,
+                transport_provenance_kind=request.transport_provenance_kind,
                 raw_sha256=sha256,
                 raw_size_bytes=size,
                 policy_status=policy.access_status,
