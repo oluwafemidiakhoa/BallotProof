@@ -9,10 +9,24 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ballotproof.auth import AuthStore
-from ballotproof.releases import build_release, load_ed25519_private_key, verify_release
+from ballotproof.releases import (
+    ReleaseProofBundle,
+    build_release,
+    create_release_inclusion_proof,
+    load_ed25519_private_key,
+    publish_release,
+    verify_release,
+    verify_release_inclusion_proof,
+    verify_release_manifest,
+)
 from ballotproof.source_approval import ApprovalEnforcingAcquisitionWorker
 from ballotproof.source_approval_auth import EnrolledSourceApprovalStore
 from ballotproof.source_worker import ProductionSourceWorker, TransportRegistry, WorkerStateStore
+
+
+def _trusted_signers(args) -> set[str] | None:
+    values = getattr(args, "trusted_signer_sha256", None)
+    return set(values) if values else None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,11 +81,66 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("BALLOTPROOF_DATA_DIR", ".ballotproof-data"),
         help="BallotProof data directory",
     )
+
     verify = release_subparsers.add_parser(
         "verify",
         help="Verify release signature, file hashes, cross-format equivalence, and Merkle root",
     )
     verify.add_argument("release_dir")
+    verify.add_argument(
+        "--trusted-signer-sha256",
+        action="append",
+        help="Require the embedded release signer to match this SHA-256 fingerprint; repeatable",
+    )
+
+    verify_manifest = release_subparsers.add_parser(
+        "verify-manifest",
+        help="Verify only the signed manifest, optionally against pinned signer fingerprints",
+    )
+    verify_manifest.add_argument("release_dir")
+    verify_manifest.add_argument(
+        "--trusted-signer-sha256",
+        action="append",
+        help="Require the embedded release signer to match this SHA-256 fingerprint; repeatable",
+    )
+
+    proof = release_subparsers.add_parser(
+        "proof",
+        help="Create a Merkle inclusion proof for one record in a fully verified release",
+    )
+    proof.add_argument("release_dir")
+    proof.add_argument("--record-type", required=True)
+    proof.add_argument("--record-key", required=True)
+    proof.add_argument("--output")
+    proof.add_argument(
+        "--trusted-signer-sha256",
+        action="append",
+        help="Require the release signer to match this SHA-256 fingerprint; repeatable",
+    )
+
+    verify_proof = release_subparsers.add_parser(
+        "verify-proof",
+        help="Verify a record inclusion proof, optionally binding it to a signed release manifest",
+    )
+    verify_proof.add_argument("proof_file")
+    verify_proof.add_argument("--release-dir")
+    verify_proof.add_argument(
+        "--trusted-signer-sha256",
+        action="append",
+        help="Require the release signer to match this SHA-256 fingerprint; repeatable",
+    )
+
+    publish = release_subparsers.add_parser(
+        "publish",
+        help="Publish a verified release into immutable content-addressed mirror paths",
+    )
+    publish.add_argument("release_dir")
+    publish.add_argument("--mirror-root", required=True)
+    publish.add_argument(
+        "--trusted-signer-sha256",
+        action="append",
+        help="Require the release signer to match this SHA-256 fingerprint; repeatable",
+    )
     return parser
 
 
@@ -90,6 +159,7 @@ def _run_auth(args, parser: argparse.ArgumentParser) -> int:
 
 
 def _run_release(args, parser: argparse.ArgumentParser) -> int:
+    trusted_signers = _trusted_signers(args)
     if args.release_command == "create":
         try:
             key = load_ed25519_private_key(args.signing_key)
@@ -104,9 +174,54 @@ def _run_release(args, parser: argparse.ArgumentParser) -> int:
         print(json.dumps(manifest.model_dump(mode="json"), sort_keys=True))
         return 0
     if args.release_command == "verify":
-        verification = verify_release(args.release_dir)
+        verification = verify_release(args.release_dir, trusted_signers)
         print(json.dumps(verification.model_dump(mode="json"), sort_keys=True))
         return 0 if verification.valid else 1
+    if args.release_command == "verify-manifest":
+        verification = verify_release_manifest(args.release_dir, trusted_signers)
+        print(json.dumps(verification.model_dump(mode="json"), sort_keys=True))
+        return 0 if verification.valid else 1
+    if args.release_command == "proof":
+        try:
+            bundle = create_release_inclusion_proof(
+                args.release_dir,
+                args.record_type,
+                args.record_key,
+                trusted_signers,
+            )
+        except (KeyError, OSError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
+        payload = json.dumps(bundle.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        if args.output:
+            Path(args.output).write_text(payload + "\n", encoding="utf-8")
+        else:
+            print(payload)
+        return 0
+    if args.release_command == "verify-proof":
+        try:
+            bundle = ReleaseProofBundle.model_validate_json(
+                Path(args.proof_file).read_text(encoding="utf-8")
+            )
+            valid = verify_release_inclusion_proof(
+                bundle,
+                release_dir=args.release_dir,
+                trusted_signer_sha256=trusted_signers,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps({"valid": valid}, sort_keys=True))
+        return 0 if valid else 1
+    if args.release_command == "publish":
+        try:
+            publication = publish_release(
+                args.release_dir,
+                args.mirror_root,
+                trusted_signers,
+            )
+        except (FileExistsError, OSError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(publication.model_dump(mode="json"), sort_keys=True))
+        return 0
     parser.error("unknown release command")
     return 2
 
