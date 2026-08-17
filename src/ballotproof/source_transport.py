@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -84,6 +85,13 @@ class SourceTransport(Protocol):
     ) -> TransportResponse | StreamingTransportResponse: ...
 
 
+class TransportProvenance(TransportModel):
+    transport_id: str = Field(min_length=1, max_length=256)
+    transport_version: str = Field(min_length=1, max_length=128)
+    transport_config_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    kind: Literal["declared", "compatibility"]
+
+
 class TransportExecutionStatus(StrEnum):
     CLAIMED = "claimed"
     COMPLETED = "completed"
@@ -97,6 +105,10 @@ class TransportExecutionRecord(TransportModel):
     request_key: str
     attempt: int = Field(ge=1)
     policy_snapshot_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    transport_id: str | None = None
+    transport_version: str | None = None
+    transport_config_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    transport_provenance_kind: str | None = None
     status: TransportExecutionStatus
     started_at: datetime
     completed_at: datetime | None = None
@@ -125,6 +137,10 @@ class SourceTransportExecutor:
                     request_key TEXT NOT NULL,
                     attempt INTEGER NOT NULL,
                     policy_snapshot_hash TEXT NOT NULL,
+                    transport_id TEXT,
+                    transport_version TEXT,
+                    transport_config_hash TEXT,
+                    transport_provenance_kind TEXT,
                     status TEXT NOT NULL,
                     started_at TEXT NOT NULL,
                     completed_at TEXT,
@@ -133,12 +149,26 @@ class SourceTransportExecutor:
                 )
                 """
             )
+            self._ensure_column(connection, "transport_id", "TEXT")
+            self._ensure_column(connection, "transport_version", "TEXT")
+            self._ensure_column(connection, "transport_config_hash", "TEXT")
+            self._ensure_column(connection, "transport_provenance_kind", "TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout = 5000")
         return connection
+
+    @staticmethod
+    def _ensure_column(connection: sqlite3.Connection, column_name: str, sql_type: str) -> None:
+        columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(source_transport_executions)")
+        }
+        if column_name not in columns:
+            connection.execute(
+                f"ALTER TABLE source_transport_executions ADD COLUMN {column_name} {sql_type}"
+            )
 
     def execution(self, reservation_id: str) -> TransportExecutionRecord:
         with self._connect() as connection:
@@ -161,12 +191,13 @@ class SourceTransportExecutor:
     ) -> CapturedResponse:
         current = self._validate_binding(snapshot, reservation)
         policy = current.policy
+        provenance = self._transport_provenance(transport)
         effective_max_bytes = policy.max_response_bytes
         if max_bytes is not None:
             effective_max_bytes = min(effective_max_bytes, max_bytes)
 
         start = started_at or datetime.now(UTC)
-        self._claim(reservation, start)
+        self._claim(reservation, provenance, start)
 
         request = TransportRequest(
             reservation_id=reservation.reservation_id,
@@ -208,6 +239,10 @@ class SourceTransportExecutor:
                     attempt=reservation.attempt,
                     request_key=reservation.request_key,
                     reservation_id=reservation.reservation_id,
+                    transport_id=provenance.transport_id,
+                    transport_version=provenance.transport_version,
+                    transport_config_hash=provenance.transport_config_hash,
+                    transport_provenance_kind=provenance.kind,
                 ),
                 policy_snapshot_hash=current.snapshot_hash,
                 max_bytes=effective_max_bytes,
@@ -239,6 +274,36 @@ class SourceTransportExecutor:
         if isinstance(response, TransportResponse):
             return _BytesReader(response.body), False
         return response.stream, response.close_stream
+
+    @staticmethod
+    def _transport_provenance(transport: SourceTransport) -> TransportProvenance:
+        values = {
+            "transport_id": getattr(transport, "transport_id", None),
+            "transport_version": getattr(transport, "transport_version", None),
+            "transport_config_hash": getattr(transport, "transport_config_hash", None),
+        }
+        present = {key for key, value in values.items() if value is not None}
+        if present and len(present) != len(values):
+            raise ValueError("transport provenance attributes must be supplied together")
+        if len(present) == len(values):
+            return TransportProvenance(
+                transport_id=str(values["transport_id"]),
+                transport_version=str(values["transport_version"]),
+                transport_config_hash=str(values["transport_config_hash"]),
+                kind="declared",
+            )
+
+        cls = type(transport)
+        identity = f"{cls.__module__}.{cls.__qualname__}"
+        config_hash = hashlib.sha256(
+            f"compatibility:{identity}:unversioned".encode("utf-8")
+        ).hexdigest()
+        return TransportProvenance(
+            transport_id=identity,
+            transport_version="unversioned",
+            transport_config_hash=config_hash,
+            kind="compatibility",
+        )
 
     def _validate_binding(
         self,
@@ -272,15 +337,21 @@ class SourceTransportExecutor:
         )
         return current
 
-    def _claim(self, reservation: SourceRequestReservation, started_at: datetime) -> None:
+    def _claim(
+        self,
+        reservation: SourceRequestReservation,
+        provenance: TransportProvenance,
+        started_at: datetime,
+    ) -> None:
         try:
             with self._connect() as connection:
                 connection.execute(
                     """
                     INSERT INTO source_transport_executions (
                         reservation_id, source_id, request_key, attempt,
-                        policy_snapshot_hash, status, started_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        policy_snapshot_hash, transport_id, transport_version,
+                        transport_config_hash, transport_provenance_kind, status, started_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         reservation.reservation_id,
@@ -288,6 +359,10 @@ class SourceTransportExecutor:
                         reservation.request_key,
                         reservation.attempt,
                         reservation.policy_snapshot_hash,
+                        provenance.transport_id,
+                        provenance.transport_version,
+                        provenance.transport_config_hash,
+                        provenance.kind,
                         TransportExecutionStatus.CLAIMED.value,
                         started_at.isoformat(),
                     ),
@@ -328,6 +403,10 @@ class SourceTransportExecutor:
             request_key=row["request_key"],
             attempt=row["attempt"],
             policy_snapshot_hash=row["policy_snapshot_hash"],
+            transport_id=row["transport_id"],
+            transport_version=row["transport_version"],
+            transport_config_hash=row["transport_config_hash"],
+            transport_provenance_kind=row["transport_provenance_kind"],
             status=row["status"],
             started_at=datetime.fromisoformat(row["started_at"]),
             completed_at=(
