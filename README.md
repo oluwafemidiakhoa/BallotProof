@@ -10,27 +10,27 @@ It is not an election authority, a winner-prediction system, or an AI judge. The
 
 - Content-addressed SHA-256 artifact storage.
 - Append-only SQLite evidence version history with hash chaining.
-- Ed25519-signed attestations bound to an exact evidence record.
+- Ed25519-signed attestations bound to exact evidence record hashes.
 - Evidence ingestion API with explicit source provenance.
 - Append-only OCR/vision extraction records with field-level confidence and model provenance.
 - Provider-neutral extraction adapter contract with reproducible configuration manifests.
 - Human review records that accept, correct, or reject extracted fields without mutating model output.
-- Polling-unit evidence bundles containing versions, chain verification, attestations, extraction, and review history.
+- Polling-unit evidence bundles containing history, chain verification, attestations, extraction, and review history.
 - Deterministic arithmetic/accreditation checks and source-to-source reconciliation.
-- Source-neutral single-edge and multi-level collation replay with explicit expected units, completeness, missing/unexpected inputs, computed totals, and declared-result deltas.
-- Multi-level replay refuses to promote incomplete child collations into parent totals.
+- Single-edge and multi-level source-neutral collation replay with conservative completeness propagation.
 - Append-only election registry snapshots for offices, candidates, expected units, topology, and source provenance.
-- Registry-bound replay that derives expected children from an exact registry version and snapshot hash.
-- Governed source-capture framework with immutable raw-response capture and provenance receipts.
+- Registry-bound replay tied to an exact registry version and snapshot hash.
+- Governed raw source capture with immutable provenance receipts.
 - Append-only, hash-chained source-policy snapshots.
-- Persisted source-request reservations that enforce policy approval, snapshot binding, retry sequencing, exponential backoff, and sliding-window request limits.
-- Source policy, receipt, and reservation query APIs.
+- Persisted request reservations enforcing source approval, policy snapshot binding, retry sequencing, exponential backoff, duplicate-attempt protection, and sliding-window request limits.
+- Source policy, receipt, and reservation query APIs exposed on the main FastAPI app.
+- Fixture-only INEC IReV adapter contract with live transport disabled pending source-specific terms/access review.
 - Next.js public evidence explorer using clearly labelled synthetic data.
 - Python tests and GitHub Actions CI.
 
 ## Non-goals
 
-BallotProof does **not** decide the official election result, infer fraud from an anomaly, treat OCR confidence as truth, silently repair source documents, hold observer private signing keys, bypass external access controls, or replace election observers and legal collation procedures.
+BallotProof does **not** decide the official election result, infer fraud from an anomaly, treat OCR confidence as truth, silently repair source documents, hold observer private signing keys, bypass authentication or anti-bot controls, reverse-engineer private source APIs, or replace election observers and legal collation procedures.
 
 ## API quick start
 
@@ -41,7 +41,7 @@ pip install -e '.[dev]'
 uvicorn apps.api.main:app --reload
 ```
 
-Set `BALLOTPROOF_DATA_DIR` to choose where immutable objects and the SQLite ledgers are stored. The default is `.ballotproof-data`.
+Set `BALLOTPROOF_DATA_DIR` to choose where immutable objects and SQLite ledgers are stored. The default is `.ballotproof-data`.
 
 Open `http://127.0.0.1:8000/docs` for the generated API explorer.
 
@@ -63,12 +63,18 @@ Open `http://127.0.0.1:8000/docs` for the generated API explorer.
 2. `GET /v1/source-policies/{source_id}` — inspect the current source policy.
 3. `GET /v1/source-policies/{source_id}/history` — inspect prior policy versions.
 4. `GET /v1/source-policies/{source_id}/chain` — verify the source-policy hash chain.
-5. `POST /v1/sources/{source_id}/reservations` — request a persisted permission-to-fetch reservation bound to an exact policy snapshot.
+5. `POST /v1/sources/{source_id}/reservations` — request persisted permission-to-fetch bound to an exact policy snapshot.
 6. `GET /v1/sources/{source_id}/reservations` — inspect the request-reservation trail.
 7. `GET /v1/sources/{source_id}/receipts` — inspect captured-response receipts.
 8. `GET /v1/receipts/{receipt_id}` — retrieve one exact provenance receipt.
 
-The source-ingestion core still performs no outbound HTTP requests. A future live adapter must obtain a reservation before requesting a source, then preserve the raw response and bind its receipt to the governing policy snapshot.
+The source core performs no outbound HTTP requests. A future live adapter must first obtain a persisted reservation and must preserve every response through the immutable receipt pipeline.
+
+## INEC IReV review
+
+The first source-specific contract targets the official INEC Result Viewing Portal origin. Its checked-in default policy remains `review_required`, and the adapter is fixture-only. BallotProof does not guess private endpoint paths or treat public viewability as permission for automated retrieval.
+
+See [`docs/INEC_IREV_REVIEW.md`](docs/INEC_IREV_REVIEW.md).
 
 ## Trust model
 
@@ -87,6 +93,7 @@ Read:
 - [`docs/ELECTION_REGISTRY.md`](docs/ELECTION_REGISTRY.md)
 - [`docs/SOURCE_INGESTION.md`](docs/SOURCE_INGESTION.md)
 - [`docs/SOURCE_GOVERNANCE.md`](docs/SOURCE_GOVERNANCE.md)
+- [`docs/INEC_IREV_REVIEW.md`](docs/INEC_IREV_REVIEW.md)
 
 ## Web
 
@@ -116,18 +123,20 @@ Completed foundation:
 4. Public evidence explorer contract.
 5. Provider-neutral extraction adapter manifests.
 6. Single-edge and multi-level collation replay with conservative completeness propagation.
-7. Versioned election registry with source provenance and hash-chained snapshots.
-8. Registry-bound replay tied to an exact snapshot hash.
-9. Governed raw source-capture framework with provenance receipts.
-10. Versioned source-policy ledger, receipt query APIs, and enforced request reservations with rate-limit/retry controls.
+7. Versioned election registry and registry-bound replay.
+8. Governed raw source capture with provenance receipts.
+9. Versioned source-policy ledger and enforced request reservations.
+10. Main API exposure for source-governance routes.
+11. Fixture-only INEC IReV source contract with a quarantined `review_required` policy.
 
 Next:
 
-1. Source-specific adapter review and contract tests for one public source.
-2. Live HTTP transport only after that source's access policy, terms, authentication requirements, and rate limits are documented and approved.
-3. Downloadable Parquet/CSV/JSON snapshots and signed manifests.
-4. Merkle checkpoints and independent mirror verification.
-5. Observer/PRVT integrations and operational security hardening.
+1. Resolve IReV-specific Terms of Use, authentication, supported automated-access contract, and rate-limit expectations before any live transport is enabled.
+2. Add a source-policy approval record only if that review supports automated access.
+3. Build a reservation -> HTTP request -> immutable receipt transport harness using a source that is explicitly approved.
+4. Add downloadable Parquet/CSV/JSON snapshots and signed manifests.
+5. Add Merkle checkpoints and independent mirror verification.
+6. Add observer/PRVT integrations and operational security hardening.
 
 ## License
 
