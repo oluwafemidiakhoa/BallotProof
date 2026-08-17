@@ -5,6 +5,8 @@ import csv
 import hashlib
 import io
 import json
+import os
+import secrets
 import sqlite3
 from pathlib import Path
 from typing import Literal
@@ -23,6 +25,11 @@ from ballotproof.provenance import canonical_json_bytes
 
 RELEASE_SCHEMA_VERSION = "1"
 PARQUET_COMPRESSION = "NONE"
+EXPECTED_RELEASE_FILES = {
+    "records.json": "application/json",
+    "records.csv": "text/csv",
+    "records.parquet": "application/vnd.apache.parquet",
+}
 
 
 class ReleaseModel(BaseModel):
@@ -66,6 +73,16 @@ class ReleaseSignature(ReleaseModel):
     signature_b64: str
 
 
+class ReleaseManifestVerification(ReleaseModel):
+    release_id: str | None = None
+    merkle_root: str | None = None
+    valid: bool
+    signature_valid: bool
+    signer_key_sha256: str | None = None
+    signer_trusted: bool | None = None
+    error: str | None = None
+
+
 class ReleaseVerification(ReleaseModel):
     release_id: str | None = None
     valid: bool
@@ -73,7 +90,52 @@ class ReleaseVerification(ReleaseModel):
     file_hashes_valid: bool
     formats_equivalent: bool
     merkle_valid: bool
+    signer_key_sha256: str | None = None
+    signer_trusted: bool | None = None
     error: str | None = None
+
+
+class MerkleProofStep(ReleaseModel):
+    side: Literal["left", "right"]
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ReleaseInclusionProof(ReleaseModel):
+    schema_version: Literal["1"] = "1"
+    release_id: str
+    merkle_algorithm: Literal["sha256-canonical-json-v1"] = "sha256-canonical-json-v1"
+    merkle_root: str = Field(pattern=r"^[a-f0-9]{64}$")
+    record_type: Literal[
+        "registry_snapshot",
+        "evidence_version",
+        "attestation",
+        "extraction",
+        "extraction_review",
+    ]
+    record_key: str
+    leaf_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    steps: list[MerkleProofStep]
+
+
+class ReleaseProofBundle(ReleaseModel):
+    record: ReleaseRecord
+    proof: ReleaseInclusionProof
+
+
+class ReleaseCheckpoint(ReleaseModel):
+    schema_version: Literal["1"] = "1"
+    release_id: str
+    election_id: str
+    merkle_root: str = Field(pattern=r"^[a-f0-9]{64}$")
+    manifest_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    signer_key_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ReleasePublication(ReleaseModel):
+    release_id: str
+    manifest_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    release_path: str
+    checkpoint_path: str
 
 
 def _canonical_payload(record: ReleaseRecord) -> str:
@@ -84,11 +146,19 @@ def _record_sort_key(record: ReleaseRecord) -> tuple[str, str]:
     return record.record_type, record.record_key
 
 
+def _ordered_records(records: list[ReleaseRecord]) -> list[ReleaseRecord]:
+    ordered = sorted(records, key=_record_sort_key)
+    previous: tuple[str, str] | None = None
+    for record in ordered:
+        key = _record_sort_key(record)
+        if key == previous:
+            raise ValueError(f"duplicate release record key: {key[0]}:{key[1]}")
+        previous = key
+    return ordered
+
+
 def _record_dicts(records: list[ReleaseRecord]) -> list[dict[str, object]]:
-    return [
-        record.model_dump(mode="json")
-        for record in sorted(records, key=_record_sort_key)
-    ]
+    return [record.model_dump(mode="json") for record in _ordered_records(records)]
 
 
 def _leaf_hash(record: ReleaseRecord) -> bytes:
@@ -96,9 +166,10 @@ def _leaf_hash(record: ReleaseRecord) -> bytes:
 
 
 def merkle_root(records: list[ReleaseRecord]) -> str:
-    if not records:
+    ordered = _ordered_records(records)
+    if not ordered:
         raise ValueError("release requires at least one record")
-    level = [_leaf_hash(record) for record in sorted(records, key=_record_sort_key)]
+    level = [_leaf_hash(record) for record in ordered]
     while len(level) > 1:
         if len(level) % 2:
             level.append(level[-1])
@@ -107,6 +178,71 @@ def merkle_root(records: list[ReleaseRecord]) -> str:
             for index in range(0, len(level), 2)
         ]
     return level[0].hex()
+
+
+def build_inclusion_proof(
+    records: list[ReleaseRecord],
+    release_id: str,
+    record_type: str,
+    record_key: str,
+) -> ReleaseProofBundle:
+    ordered = _ordered_records(records)
+    if not ordered:
+        raise ValueError("release requires at least one record")
+    matches = [
+        (index, record)
+        for index, record in enumerate(ordered)
+        if record.record_type == record_type and record.record_key == record_key
+    ]
+    if not matches:
+        raise KeyError(f"Unknown release record: {record_type}:{record_key}")
+    index, record = matches[0]
+    level = [_leaf_hash(item) for item in ordered]
+    root_hash = merkle_root(ordered)
+    steps: list[MerkleProofStep] = []
+    while len(level) > 1:
+        if len(level) % 2:
+            level.append(level[-1])
+        sibling_index = index ^ 1
+        steps.append(
+            MerkleProofStep(
+                side="left" if sibling_index < index else "right",
+                sha256=level[sibling_index].hex(),
+            )
+        )
+        level = [
+            hashlib.sha256(level[position] + level[position + 1]).digest()
+            for position in range(0, len(level), 2)
+        ]
+        index //= 2
+    return ReleaseProofBundle(
+        record=record,
+        proof=ReleaseInclusionProof(
+            release_id=release_id,
+            merkle_root=root_hash,
+            record_type=record.record_type,
+            record_key=record.record_key,
+            leaf_sha256=_leaf_hash(record).hex(),
+            steps=steps,
+        ),
+    )
+
+
+def verify_inclusion_proof(bundle: ReleaseProofBundle) -> bool:
+    record = bundle.record
+    proof = bundle.proof
+    if record.record_type != proof.record_type or record.record_key != proof.record_key:
+        return False
+    current = _leaf_hash(record)
+    if current.hex() != proof.leaf_sha256:
+        return False
+    for step in proof.steps:
+        sibling = bytes.fromhex(step.sha256)
+        if step.side == "left":
+            current = hashlib.sha256(sibling + current).digest()
+        else:
+            current = hashlib.sha256(current + sibling).digest()
+    return current.hex() == proof.merkle_root
 
 
 def _sha256(data: bytes) -> str:
@@ -130,13 +266,13 @@ def _csv_bytes(records: list[ReleaseRecord]) -> bytes:
     output = io.StringIO(newline="")
     writer = csv.writer(output, lineterminator="\n")
     writer.writerow(["record_type", "record_key", "payload_json"])
-    for record in sorted(records, key=_record_sort_key):
+    for record in _ordered_records(records):
         writer.writerow([record.record_type, record.record_key, _canonical_payload(record)])
     return output.getvalue().encode("utf-8")
 
 
 def _parquet_bytes(records: list[ReleaseRecord]) -> bytes:
-    ordered = sorted(records, key=_record_sort_key)
+    ordered = _ordered_records(records)
     payload_json = [_canonical_payload(record) for record in ordered]
     table = pa.table(
         {
@@ -199,7 +335,7 @@ def collect_release_records(root: str | Path, election_id: str) -> list[ReleaseR
 
     evidence_path = root / "ballotproof.sqlite3"
     if not evidence_path.exists():
-        return sorted(records, key=_record_sort_key)
+        return _ordered_records(records)
     with sqlite3.connect(evidence_path) as connection:
         connection.row_factory = sqlite3.Row
         evidence_rows = connection.execute(
@@ -273,7 +409,7 @@ def collect_release_records(root: str | Path, election_id: str) -> list[ReleaseR
                             payload=json.loads(str(review_row["review_json"])),
                         )
                     )
-    return sorted(records, key=_record_sort_key)
+    return _ordered_records(records)
 
 
 def build_release(
@@ -372,29 +508,112 @@ def _records_from_parquet(data: bytes) -> list[ReleaseRecord]:
     ]
 
 
-def verify_release(directory: str | Path) -> ReleaseVerification:
+def _validate_manifest_files(manifest: ReleaseManifest) -> dict[str, ReleaseFile]:
+    files: dict[str, ReleaseFile] = {}
+    for item in manifest.files:
+        if item.name in files:
+            raise ValueError(f"duplicate manifest file name: {item.name}")
+        files[item.name] = item
+    if set(files) != set(EXPECTED_RELEASE_FILES):
+        raise ValueError("release manifest must contain exactly the schema-v1 export files")
+    for name, expected_media_type in EXPECTED_RELEASE_FILES.items():
+        if files[name].media_type != expected_media_type:
+            raise ValueError(f"unexpected media type for {name}")
+    return files
+
+
+def _signer_trust_status(
+    signer_key_sha256: str,
+    trusted_signer_sha256: set[str] | None,
+) -> bool | None:
+    if trusted_signer_sha256 is None:
+        return None
+    normalized: set[str] = set()
+    for value in trusted_signer_sha256:
+        candidate = value.lower()
+        if len(candidate) != 64 or any(char not in "0123456789abcdef" for char in candidate):
+            raise ValueError("trusted signer fingerprints must be 64 hexadecimal characters")
+        normalized.add(candidate)
+    return signer_key_sha256 in normalized
+
+
+def _load_verified_manifest(
+    directory: Path,
+    trusted_signer_sha256: set[str] | None = None,
+) -> tuple[ReleaseManifest, ReleaseSignature, bool, bool | None]:
+    manifest_raw = (directory / "manifest.json").read_bytes().rstrip(b"\n")
+    manifest = ReleaseManifest.model_validate_json(manifest_raw)
+    _validate_manifest_files(manifest)
+    signature = ReleaseSignature.model_validate_json(
+        (directory / "manifest.signature.json").read_bytes()
+    )
+    manifest_hash_valid = _sha256(manifest_raw) == signature.manifest_sha256
+    public_key_bytes = base64.b64decode(signature.public_key_b64, validate=True)
+    key_hash_valid = _sha256(public_key_bytes) == signature.signer_key_sha256
+    public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
+    public_key.verify(
+        base64.b64decode(signature.signature_b64, validate=True),
+        manifest_raw,
+    )
+    signature_valid = manifest_hash_valid and key_hash_valid
+    signer_trusted = _signer_trust_status(
+        signature.signer_key_sha256,
+        trusted_signer_sha256,
+    )
+    return manifest, signature, signature_valid, signer_trusted
+
+
+def verify_release_manifest(
+    directory: str | Path,
+    trusted_signer_sha256: set[str] | None = None,
+) -> ReleaseManifestVerification:
+    try:
+        manifest, signature, signature_valid, signer_trusted = _load_verified_manifest(
+            Path(directory),
+            trusted_signer_sha256,
+        )
+        valid = signature_valid and signer_trusted is not False
+        return ReleaseManifestVerification(
+            release_id=manifest.release_id,
+            merkle_root=manifest.merkle_root,
+            valid=valid,
+            signature_valid=signature_valid,
+            signer_key_sha256=signature.signer_key_sha256,
+            signer_trusted=signer_trusted,
+        )
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        KeyError,
+        InvalidSignature,
+        json.JSONDecodeError,
+    ) as exc:
+        return ReleaseManifestVerification(
+            valid=False,
+            signature_valid=False,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+
+def verify_release(
+    directory: str | Path,
+    trusted_signer_sha256: set[str] | None = None,
+) -> ReleaseVerification:
     directory = Path(directory)
     try:
-        manifest_raw = (directory / "manifest.json").read_bytes().rstrip(b"\n")
-        manifest = ReleaseManifest.model_validate_json(manifest_raw)
-        signature = ReleaseSignature.model_validate_json(
-            (directory / "manifest.signature.json").read_bytes()
+        manifest, signature, signature_valid, signer_trusted = _load_verified_manifest(
+            directory,
+            trusted_signer_sha256,
         )
-        manifest_hash_valid = _sha256(manifest_raw) == signature.manifest_sha256
-        public_key_bytes = base64.b64decode(signature.public_key_b64, validate=True)
-        key_hash_valid = _sha256(public_key_bytes) == signature.signer_key_sha256
-        public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
-        public_key.verify(
-            base64.b64decode(signature.signature_b64, validate=True),
-            manifest_raw,
-        )
-        signature_valid = manifest_hash_valid and key_hash_valid
+        manifest_files = _validate_manifest_files(manifest)
 
         file_hashes_valid = True
         file_bytes: dict[str, bytes] = {}
-        for item in manifest.files:
-            data = (directory / item.name).read_bytes()
-            file_bytes[item.name] = data
+        for name in EXPECTED_RELEASE_FILES:
+            item = manifest_files[name]
+            data = (directory / name).read_bytes()
+            file_bytes[name] = data
             if _sha256(data) != item.sha256 or len(data) != item.size_bytes:
                 file_hashes_valid = False
 
@@ -413,7 +632,13 @@ def verify_release(directory: str | Path) -> ReleaseVerification:
             len(json_records) == manifest.record_count
             and merkle_root(json_records) == manifest.merkle_root
         )
-        valid = signature_valid and file_hashes_valid and formats_equivalent and merkle_valid
+        valid = (
+            signature_valid
+            and signer_trusted is not False
+            and file_hashes_valid
+            and formats_equivalent
+            and merkle_valid
+        )
         return ReleaseVerification(
             release_id=manifest.release_id,
             valid=valid,
@@ -421,6 +646,8 @@ def verify_release(directory: str | Path) -> ReleaseVerification:
             file_hashes_valid=file_hashes_valid,
             formats_equivalent=formats_equivalent,
             merkle_valid=merkle_valid,
+            signer_key_sha256=signature.signer_key_sha256,
+            signer_trusted=signer_trusted,
         )
     except (
         OSError,
@@ -438,3 +665,110 @@ def verify_release(directory: str | Path) -> ReleaseVerification:
             merkle_valid=False,
             error=f"{type(exc).__name__}: {exc}",
         )
+
+
+def create_release_inclusion_proof(
+    directory: str | Path,
+    record_type: str,
+    record_key: str,
+    trusted_signer_sha256: set[str] | None = None,
+) -> ReleaseProofBundle:
+    directory = Path(directory)
+    verification = verify_release(directory, trusted_signer_sha256)
+    if not verification.valid:
+        raise ValueError(verification.error or "release verification failed")
+    manifest = ReleaseManifest.model_validate_json((directory / "manifest.json").read_bytes())
+    records = [
+        ReleaseRecord.model_validate(item)
+        for item in json.loads((directory / "records.json").read_text(encoding="utf-8"))
+    ]
+    bundle = build_inclusion_proof(records, manifest.release_id, record_type, record_key)
+    if bundle.proof.merkle_root != manifest.merkle_root:
+        raise ValueError("inclusion proof root does not match release manifest")
+    return bundle
+
+
+def verify_release_inclusion_proof(
+    bundle: ReleaseProofBundle,
+    release_dir: str | Path | None = None,
+    trusted_signer_sha256: set[str] | None = None,
+) -> bool:
+    if not verify_inclusion_proof(bundle):
+        return False
+    if release_dir is None:
+        return True
+    manifest_verification = verify_release_manifest(release_dir, trusted_signer_sha256)
+    return (
+        manifest_verification.valid
+        and manifest_verification.release_id == bundle.proof.release_id
+        and manifest_verification.merkle_root == bundle.proof.merkle_root
+    )
+
+
+def _immutable_write(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if not path.is_file() or path.read_bytes() != data:
+            raise FileExistsError(f"immutable publication conflict: {path}")
+        return
+    temp = path.parent / f".{path.name}.{secrets.token_hex(8)}.tmp"
+    try:
+        with temp.open("xb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temp, path)
+        except FileExistsError:
+            if not path.is_file() or path.read_bytes() != data:
+                raise FileExistsError(f"immutable publication conflict: {path}") from None
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def publish_release(
+    release_dir: str | Path,
+    mirror_root: str | Path,
+    trusted_signer_sha256: set[str] | None = None,
+) -> ReleasePublication:
+    release_dir = Path(release_dir)
+    verification = verify_release(release_dir, trusted_signer_sha256)
+    if not verification.valid:
+        raise ValueError(verification.error or "release verification failed")
+
+    manifest_raw = (release_dir / "manifest.json").read_bytes().rstrip(b"\n")
+    manifest = ReleaseManifest.model_validate_json(manifest_raw)
+    signature = ReleaseSignature.model_validate_json(
+        (release_dir / "manifest.signature.json").read_bytes()
+    )
+    manifest_sha256 = _sha256(manifest_raw)
+    relative_release = Path("releases") / manifest_sha256
+    relative_checkpoint = Path("checkpoints") / f"{manifest_sha256}.json"
+    publication_dir = Path(mirror_root) / relative_release
+
+    if publication_dir.exists():
+        if not publication_dir.is_dir():
+            raise FileExistsError(f"immutable publication conflict: {publication_dir}")
+        expected = set(EXPECTED_RELEASE_FILES) | {"manifest.json", "manifest.signature.json"}
+        existing = {child.name for child in publication_dir.iterdir()}
+        if existing - expected:
+            raise FileExistsError(f"unexpected files in immutable publication: {publication_dir}")
+
+    for name in (*EXPECTED_RELEASE_FILES, "manifest.json", "manifest.signature.json"):
+        _immutable_write(publication_dir / name, (release_dir / name).read_bytes())
+
+    checkpoint = ReleaseCheckpoint(
+        release_id=manifest.release_id,
+        election_id=manifest.election_id,
+        merkle_root=manifest.merkle_root,
+        manifest_sha256=manifest_sha256,
+        signer_key_sha256=signature.signer_key_sha256,
+    )
+    checkpoint_bytes = canonical_json_bytes(checkpoint.model_dump(mode="json")) + b"\n"
+    _immutable_write(Path(mirror_root) / relative_checkpoint, checkpoint_bytes)
+    return ReleasePublication(
+        release_id=manifest.release_id,
+        manifest_sha256=manifest_sha256,
+        release_path=relative_release.as_posix(),
+        checkpoint_path=relative_checkpoint.as_posix(),
+    )
