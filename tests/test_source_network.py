@@ -140,16 +140,27 @@ def test_transport_rejects_oversized_declared_response_before_streaming():
     assert connection.closed is True
 
 
-def test_transport_config_hash_is_stable_without_exposing_secret():
+def test_transport_config_hash_is_stable_without_exposing_or_hashing_secret_values():
     one = PinnedHTTPSStreamingTransport(
         transport_id="test",
         transport_version="1",
-        headers={"Authorization": "secret-value"},
+        headers={"Authorization": "secret-value-one"},
+        public_config={"auth_profile": "iec-production"},
     )
     two = PinnedHTTPSStreamingTransport(
         transport_id="test",
         transport_version="1",
-        headers={"Authorization": "secret-value"},
+        headers={"Authorization": "secret-value-two"},
+        public_config={"auth_profile": "iec-production"},
     )
+    three = PinnedHTTPSStreamingTransport(
+        transport_id="test",
+        transport_version="1",
+        headers={"Authorization": "secret-value-two"},
+        public_config={"auth_profile": "iec-staging"},
+    )
+
     assert one.transport_config_hash == two.transport_config_hash
-    assert "secret-value" not in one.transport_config_hash
+    assert one.transport_config_hash != three.transport_config_hash
+    assert "secret-value-one" not in one.transport_config_hash
+    assert "secret-value-two" not in two.transport_config_hash
