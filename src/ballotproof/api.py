@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from ballotproof.attestations import verify_attestation
+from ballotproof.collation import CollationReplayReport, CollationReplayRequest, replay_collation
 from ballotproof.models import (
     ChainVerification,
     EvidenceFingerprint,
@@ -42,7 +43,7 @@ SourceType = Literal[
 
 app = FastAPI(
     title="BallotProof API",
-    version="0.3.0",
+    version="0.4.0",
     description=(
         "Evidence-preserving primitives for election verification. BallotProof stores source "
         "artifacts, exposes provenance, and keeps machine extraction separate from human review."
@@ -69,6 +70,15 @@ def validate_sheet(sheet: ResultSheet) -> ValidationReport:
 @app.post("/v1/reconcile", response_model=ReconciliationReport, tags=["verification"])
 def reconcile(request: ReconciliationRequest) -> ReconciliationReport:
     return reconcile_totals(request)
+
+
+@app.post(
+    "/v1/collation/replay",
+    response_model=CollationReplayReport,
+    tags=["verification"],
+)
+def replay_collation_endpoint(request: CollationReplayRequest) -> CollationReplayReport:
+    return replay_collation(request)
 
 
 @app.post("/v1/evidence/fingerprint", response_model=EvidenceFingerprint, tags=["evidence"])
