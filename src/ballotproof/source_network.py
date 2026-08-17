@@ -29,6 +29,7 @@ class PinnedHTTPSStreamingTransport:
         transport_id: str,
         transport_version: str,
         headers: Mapping[str, str] | None = None,
+        public_config: Mapping[str, str] | None = None,
         resolver: Resolver | None = None,
         connection_factory: ConnectionFactory | None = None,
     ) -> None:
@@ -37,12 +38,14 @@ class PinnedHTTPSStreamingTransport:
         self.transport_id = transport_id.strip()
         self.transport_version = transport_version.strip()
         self._headers = dict(headers or {})
+        self._public_config = dict(public_config or {})
         self._resolver = resolver or _resolve_public_addresses
         self._connection_factory = connection_factory or _build_pinned_connection
         self.transport_config_hash = _config_hash(
             self.transport_id,
             self.transport_version,
             self._headers,
+            self._public_config,
         )
 
     def send(self, request: TransportRequest) -> StreamingTransportResponse:
@@ -157,14 +160,17 @@ class _ManagedHTTPStream:
             self._connection.close()
 
 
-def _config_hash(transport_id: str, version: str, headers: Mapping[str, str]) -> str:
+def _config_hash(
+    transport_id: str,
+    version: str,
+    headers: Mapping[str, str],
+    public_config: Mapping[str, str],
+) -> str:
     payload = {
         "transport_id": transport_id,
         "transport_version": version,
-        "headers": {
-            key.lower(): hashlib.sha256(value.encode("utf-8")).hexdigest()
-            for key, value in sorted(headers.items())
-        },
+        "header_names": sorted(key.strip().lower() for key in headers),
+        "public_config": {key: public_config[key] for key in sorted(public_config)},
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
