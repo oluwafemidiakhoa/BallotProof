@@ -8,6 +8,11 @@ import threading
 from collections.abc import Sequence
 from pathlib import Path
 
+from ballotproof.source_approval import (
+    ApprovalEnforcingAcquisitionWorker,
+    SourceApprovalStore,
+    trusted_source_approver_keys_from_env,
+)
 from ballotproof.source_worker import ProductionSourceWorker, TransportRegistry, WorkerStateStore
 
 
@@ -58,13 +63,25 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
     if not args.transport:
         parser.error("worker execution requires at least one explicit --transport registration")
     try:
+        trusted_keys = trusted_source_approver_keys_from_env()
+        if not trusted_keys:
+            parser.error(
+                "worker execution requires BALLOTPROOF_SOURCE_APPROVER_KEYS_SHA256 "
+                "with at least one trusted Ed25519 public-key fingerprint"
+            )
         registry = TransportRegistry.from_specs(args.transport)
+        approval_store = SourceApprovalStore(root, trusted_signer_keys=trusted_keys)
+        acquisition_worker = ApprovalEnforcingAcquisitionWorker(
+            root,
+            approval_store=approval_store,
+        )
         worker = ProductionSourceWorker(
             root,
             registry=registry,
             poll_seconds=args.poll_seconds,
             batch_limit=args.batch_limit,
             lease_seconds=args.lease_seconds,
+            acquisition_worker=acquisition_worker,
         )
     except (ImportError, AttributeError, TypeError, ValueError) as exc:
         parser.error(str(exc))
