@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 SEMANTIC_SCHEMA_VERSION = "1"
 SEMANTIC_ALGORITHM = "sha256-semantic-record-set-v1"
-SNAPSHOT_STRATEGY = "sqlite-data-version-stable-window-v1"
+SNAPSHOT_STRATEGY = "ballotproof-write-barrier-v1"
 SEMANTIC_NORMALIZATION_RULES = {
     "registry_snapshot": {
         "exclude": [
@@ -100,7 +100,7 @@ class ReleaseSemanticSummary(SemanticModel):
     semantic_record_count: int = Field(ge=1)
     semantic_root: str = Field(pattern=r"^[a-f0-9]{64}$")
     normalization_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
-    snapshot_strategy: Literal["sqlite-data-version-stable-window-v1"] = SNAPSHOT_STRATEGY
+    snapshot_strategy: Literal["ballotproof-write-barrier-v1"] = SNAPSHOT_STRATEGY
 
 
 class ReleaseSemanticSignature(SemanticModel):
