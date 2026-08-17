@@ -35,7 +35,7 @@ class ResultSheet(StrictModel):
     candidate_votes: list[CandidateVote] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def candidate_ids_are_unique(self) -> "ResultSheet":
+    def candidate_ids_are_unique(self) -> ResultSheet:
         candidate_ids = [entry.candidate_id for entry in self.candidate_votes]
         if len(candidate_ids) != len(set(candidate_ids)):
             raise ValueError("candidate_id values must be unique within a result sheet")
