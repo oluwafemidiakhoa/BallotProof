@@ -7,7 +7,11 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from ballotproof.auth import AuthStore, Permission, Role
-from ballotproof.source_approval import ReviewedSourceEvidence, SourceApprovalPayload, sign_source_approval
+from ballotproof.source_approval import (
+    ReviewedSourceEvidence,
+    SourceApprovalPayload,
+    sign_source_approval,
+)
 from ballotproof.source_approval_auth import EnrolledSourceApprovalStore
 from ballotproof.source_ingestion import SourceAccessStatus, SourcePolicy
 from ballotproof.source_policy import SourcePolicyStore
@@ -84,7 +88,9 @@ def test_revoked_enrolled_key_invalidates_source_authorization(tmp_path):
             policy_snapshot_hash=snapshot.snapshot_hash,
             decision="approve",
             approver_id="reviewer:alice",
-            reviewed_evidence=[ReviewedSourceEvidence(reference="terms://fixture", sha256="a" * 64)],
+            reviewed_evidence=[
+                ReviewedSourceEvidence(reference="terms://fixture", sha256="a" * 64)
+            ],
             rationale="Fixture retention permission explicitly reviewed.",
             issued_at=datetime(2026, 8, 17, 2, 0, tzinfo=UTC),
         ),
@@ -92,6 +98,7 @@ def test_revoked_enrolled_key_invalidates_source_authorization(tmp_path):
     )
     approval_store.append(event)
     assert approval_store.authorization(snapshot).authorized
-    assert auth_store.approver_key_is_active(hashlib.sha256(raw).hexdigest(), "reviewer:alice")
+    fingerprint = hashlib.sha256(raw).hexdigest()
+    assert auth_store.approver_key_is_active(fingerprint, "reviewer:alice")
     auth_store.revoke_approver_key(enrolled.key_id, performed_by="admin:one")
     assert approval_store.authorization(snapshot).authorized is False
