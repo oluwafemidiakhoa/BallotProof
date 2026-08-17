@@ -177,11 +177,18 @@ class AuthStore:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 connection.execute(
-                    "INSERT INTO identities (actor_id, display_name, roles_json, created_at) VALUES (?, ?, ?, ?)",
+                    """
+                    INSERT INTO identities (
+                        actor_id, display_name, roles_json, created_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
                     (
                         actor_id,
                         display_name,
-                        json.dumps([role.value for role in normalized_roles], separators=(",", ":")),
+                        json.dumps(
+                            [role.value for role in normalized_roles],
+                            separators=(",", ":"),
+                        ),
                         created_at.isoformat(),
                     ),
                 )
@@ -220,7 +227,10 @@ class AuthStore:
     def get_identity(self, actor_id: str) -> Identity:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT actor_id, display_name, roles_json, created_at, disabled_at FROM identities WHERE actor_id = ?",
+                """
+                SELECT actor_id, display_name, roles_json, created_at, disabled_at
+                FROM identities WHERE actor_id = ?
+                """,
                 (actor_id,),
             ).fetchone()
         if row is None:
@@ -230,7 +240,10 @@ class AuthStore:
     def identities(self) -> list[Identity]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT actor_id, display_name, roles_json, created_at, disabled_at FROM identities ORDER BY actor_id"
+                """
+                SELECT actor_id, display_name, roles_json, created_at, disabled_at
+                FROM identities ORDER BY actor_id
+                """
             ).fetchall()
         return [self._identity_from_row(row) for row in rows]
 
@@ -246,7 +259,13 @@ class AuthStore:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 "UPDATE identities SET roles_json = ? WHERE actor_id = ?",
-                (json.dumps([role.value for role in normalized], separators=(",", ":")), actor_id),
+                (
+                    json.dumps(
+                        [role.value for role in normalized],
+                        separators=(",", ":"),
+                    ),
+                    actor_id,
+                ),
             )
             self._append_audit(
                 connection,
@@ -301,7 +320,10 @@ class AuthStore:
                 event_type="api_key.issued",
                 actor_id=performed_by,
                 target_id=key_id,
-                payload={"subject_actor_id": actor_id, "expires_at": None if expires_at is None else expires_at.isoformat()},
+                payload={
+                    "subject_actor_id": actor_id,
+                    "expires_at": None if expires_at is None else expires_at.isoformat(),
+                },
                 created_at=now,
             )
             connection.commit()
@@ -316,7 +338,10 @@ class AuthStore:
     def api_keys(self) -> list[ApiKeyMetadata]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT key_id, actor_id, token_prefix, created_at, expires_at, revoked_at FROM api_keys ORDER BY created_at"
+                """
+                SELECT key_id, actor_id, token_prefix, created_at, expires_at, revoked_at
+                FROM api_keys ORDER BY created_at
+                """
             ).fetchall()
         return [
             ApiKeyMetadata(
@@ -324,8 +349,16 @@ class AuthStore:
                 actor_id=row["actor_id"],
                 token_prefix=row["token_prefix"],
                 created_at=datetime.fromisoformat(row["created_at"]),
-                expires_at=None if row["expires_at"] is None else datetime.fromisoformat(row["expires_at"]),
-                revoked_at=None if row["revoked_at"] is None else datetime.fromisoformat(row["revoked_at"]),
+                expires_at=(
+                    None
+                    if row["expires_at"] is None
+                    else datetime.fromisoformat(row["expires_at"])
+                ),
+                revoked_at=(
+                    None
+                    if row["revoked_at"] is None
+                    else datetime.fromisoformat(row["revoked_at"])
+                ),
             )
             for row in rows
         ]
@@ -347,8 +380,10 @@ class AuthStore:
             ).fetchone()
         if row is None or row["revoked_at"] is not None or row["disabled_at"] is not None:
             return None
-        if row["expires_at"] is not None and datetime.fromisoformat(row["expires_at"]) <= datetime.now(UTC):
-            return None
+        if row["expires_at"] is not None:
+            expires_at = datetime.fromisoformat(row["expires_at"])
+            if expires_at <= datetime.now(UTC):
+                return None
         salt = base64.b64decode(row["salt_b64"], validate=True)
         expected = base64.b64decode(row["verifier_b64"], validate=True)
         actual = self._derive_verifier(secret, salt)
@@ -360,7 +395,10 @@ class AuthStore:
             key=lambda item: item.value,
         )
         return AuthenticatedPrincipal(
-            actor_id=row["actor_id"], key_id=row["key_id"], roles=roles, permissions=permissions
+            actor_id=row["actor_id"],
+            key_id=row["key_id"],
+            roles=roles,
+            permissions=permissions,
         )
 
     def revoke_api_key(self, key_id: str, *, performed_by: str) -> ApiKeyMetadata:
@@ -377,7 +415,8 @@ class AuthStore:
                 connection.rollback()
                 raise ValueError("API key is already revoked")
             connection.execute(
-                "UPDATE api_keys SET revoked_at = ? WHERE key_id = ?", (now.isoformat(), key_id)
+                "UPDATE api_keys SET revoked_at = ? WHERE key_id = ?",
+                (now.isoformat(), key_id),
             )
             self._append_audit(
                 connection,
@@ -437,14 +476,18 @@ class AuthStore:
 
     def get_approver_key(self, key_id: str) -> ApproverKey:
         with self._connect() as connection:
-            row = connection.execute("SELECT * FROM approver_keys WHERE key_id = ?", (key_id,)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM approver_keys WHERE key_id = ?", (key_id,)
+            ).fetchone()
         if row is None:
             raise KeyError(f"Unknown approver key_id: {key_id}")
         return self._approver_key_from_row(row)
 
     def approver_keys(self) -> list[ApproverKey]:
         with self._connect() as connection:
-            rows = connection.execute("SELECT * FROM approver_keys ORDER BY enrolled_at").fetchall()
+            rows = connection.execute(
+                "SELECT * FROM approver_keys ORDER BY enrolled_at"
+            ).fetchall()
         return [self._approver_key_from_row(row) for row in rows]
 
     def revoke_approver_key(self, key_id: str, *, performed_by: str) -> ApproverKey:
@@ -461,7 +504,11 @@ class AuthStore:
                 connection.rollback()
                 raise ValueError("approver key is already revoked")
             connection.execute(
-                "UPDATE approver_keys SET revoked_at = ?, revoked_by_actor_id = ? WHERE key_id = ?",
+                """
+                UPDATE approver_keys
+                SET revoked_at = ?, revoked_by_actor_id = ?
+                WHERE key_id = ?
+                """,
                 (now.isoformat(), performed_by, key_id),
             )
             self._append_audit(
@@ -492,7 +539,9 @@ class AuthStore:
 
     def audit_events(self) -> list[AuditEvent]:
         with self._connect() as connection:
-            rows = connection.execute("SELECT * FROM auth_audit_events ORDER BY sequence").fetchall()
+            rows = connection.execute(
+                "SELECT * FROM auth_audit_events ORDER BY sequence"
+            ).fetchall()
         return [
             AuditEvent(
                 sequence=int(row["sequence"]),
@@ -526,7 +575,14 @@ class AuthStore:
 
     @staticmethod
     def _derive_verifier(secret: str, salt: bytes) -> bytes:
-        return hashlib.scrypt(secret.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32)
+        return hashlib.scrypt(
+            secret.encode("utf-8"),
+            salt=salt,
+            n=2**14,
+            r=8,
+            p=1,
+            dklen=32,
+        )
 
     @staticmethod
     def _parse_token(token: str) -> tuple[str, str] | None:
@@ -545,7 +601,11 @@ class AuthStore:
             display_name=row["display_name"],
             roles=[Role(value) for value in json.loads(row["roles_json"])],
             created_at=datetime.fromisoformat(row["created_at"]),
-            disabled_at=None if row["disabled_at"] is None else datetime.fromisoformat(row["disabled_at"]),
+            disabled_at=(
+                None
+                if row["disabled_at"] is None
+                else datetime.fromisoformat(row["disabled_at"])
+            ),
         )
 
     @staticmethod
@@ -557,7 +617,11 @@ class AuthStore:
             public_key_sha256=row["public_key_sha256"],
             enrolled_at=datetime.fromisoformat(row["enrolled_at"]),
             enrolled_by_actor_id=row["enrolled_by_actor_id"],
-            revoked_at=None if row["revoked_at"] is None else datetime.fromisoformat(row["revoked_at"]),
+            revoked_at=(
+                None
+                if row["revoked_at"] is None
+                else datetime.fromisoformat(row["revoked_at"])
+            ),
             revoked_by_actor_id=row["revoked_by_actor_id"],
         )
 
