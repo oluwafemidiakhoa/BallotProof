@@ -115,27 +115,47 @@ def test_checkpoint_is_signed_linked_and_anchored_to_enrolled_key(tmp_path):
     assert checkpoint.payload.previous_checkpoint_hash is None
     assert checkpoint.payload.release_signer_key_id == enrolled.key_id
     assert checkpoint.payload.release_signer_key_sha256 == enrolled.public_key_sha256
-    assert checkpoint.payload.release_key_enrollment_event_hash == governance.release_key_events()[0].event_hash
+    enrollment_event = governance.release_key_events()[0]
+    assert checkpoint.payload.release_key_enrollment_event_hash == enrollment_event.event_hash
     assert verification.valid
     assert verification.checkpoints_checked == 1
     assert verification.head_checkpoint_hash == checkpoint.checkpoint_hash
 
 
-def test_revocation_blocks_future_checkpoints_but_preserves_history(tmp_path):
+def test_checkpoint_chain_links_successive_releases(tmp_path):
+    _, governance, key, _, first_release = _governed_release(tmp_path)
+    first = governance.append_checkpoint(first_release, key)
+
+    _registry(tmp_path)
+    second_release = tmp_path / "release-two"
+    build_release(tmp_path, "demo-election", second_release, key)
+    second = governance.append_checkpoint(second_release, key)
+
+    verification = governance.verify_checkpoint_chain("demo-election")
+    assert second.payload.sequence == 2
+    assert second.payload.previous_checkpoint_hash == first.checkpoint_hash
+    assert verification.valid
+    assert verification.checkpoints_checked == 2
+    assert verification.head_checkpoint_hash == second.checkpoint_hash
+
+
+def test_revocation_blocks_new_release_checkpoint_but_preserves_history(tmp_path):
     _, governance, key, enrolled, release_dir = _governed_release(tmp_path)
     governance.append_checkpoint(release_dir, key)
     governance.revoke_release_signing_key(enrolled.key_id, performed_by="admin:one")
 
     assert governance.verify_checkpoint_chain("demo-election").valid
 
-    # A new store instance sees the same revoked governance state and refuses new publication.
+    _registry(tmp_path)
+    future_release = tmp_path / "release-after-revocation"
+    build_release(tmp_path, "demo-election", future_release, key)
     reloaded = ReleaseGovernanceStore(tmp_path, auth_store=AuthStore(tmp_path))
     try:
-        reloaded.append_checkpoint(release_dir, key)
+        reloaded.append_checkpoint(future_release, key)
     except PermissionError as exc:
         assert "currently authorized" in str(exc)
     else:
-        raise AssertionError("revoked release key was allowed to create a checkpoint")
+        raise AssertionError("revoked release key was allowed to checkpoint a new release")
 
 
 def test_checkpoint_chain_detects_stored_checkpoint_tampering(tmp_path):
