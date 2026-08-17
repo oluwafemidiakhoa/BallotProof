@@ -9,6 +9,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 from ballotproof.provenance import hash_record
+from ballotproof.write_barrier import ReleaseWriteBarrier
 
 
 class RegistryModel(BaseModel):
@@ -110,6 +111,7 @@ class ElectionRegistryStore:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "registry.sqlite3"
+        self.write_barrier = ReleaseWriteBarrier(self.root)
         with self._connect() as connection:
             connection.execute(
                 """
@@ -152,49 +154,50 @@ class ElectionRegistryStore:
 
     def append(self, payload: ElectionRegistryPayload) -> ElectionRegistrySnapshot:
         stored_at = datetime.now(UTC)
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            previous = connection.execute(
-                """
-                SELECT version, snapshot_hash FROM registry_snapshots
-                WHERE election_id = ? ORDER BY version DESC LIMIT 1
-                """,
-                (payload.election_id,),
-            ).fetchone()
-            version = 1 if previous is None else int(previous["version"]) + 1
-            previous_hash = None if previous is None else str(previous["snapshot_hash"])
-            snapshot_id = f"bp_reg_{uuid4().hex}"
-            body = self._hash_body(
-                snapshot_id=snapshot_id,
-                election_id=payload.election_id,
-                version=version,
-                payload=payload,
-                stored_at=stored_at,
-                previous_snapshot_hash=previous_hash,
-            )
-            snapshot_hash = hash_record(body)
-            snapshot = ElectionRegistrySnapshot(
-                **body,
-                snapshot_hash=snapshot_hash,
-            )
-            connection.execute(
-                """
-                INSERT INTO registry_snapshots (
-                    election_id, version, snapshot_id, payload_json, stored_at,
-                    previous_snapshot_hash, snapshot_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    payload.election_id,
-                    version,
-                    snapshot_id,
-                    payload.model_dump_json(),
-                    stored_at.isoformat(),
-                    previous_hash,
-                    snapshot_hash,
-                ),
-            )
-            connection.commit()
+        with self.write_barrier.hold(advance_generation=True):
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                previous = connection.execute(
+                    """
+                    SELECT version, snapshot_hash FROM registry_snapshots
+                    WHERE election_id = ? ORDER BY version DESC LIMIT 1
+                    """,
+                    (payload.election_id,),
+                ).fetchone()
+                version = 1 if previous is None else int(previous["version"]) + 1
+                previous_hash = None if previous is None else str(previous["snapshot_hash"])
+                snapshot_id = f"bp_reg_{uuid4().hex}"
+                body = self._hash_body(
+                    snapshot_id=snapshot_id,
+                    election_id=payload.election_id,
+                    version=version,
+                    payload=payload,
+                    stored_at=stored_at,
+                    previous_snapshot_hash=previous_hash,
+                )
+                snapshot_hash = hash_record(body)
+                snapshot = ElectionRegistrySnapshot(
+                    **body,
+                    snapshot_hash=snapshot_hash,
+                )
+                connection.execute(
+                    """
+                    INSERT INTO registry_snapshots (
+                        election_id, version, snapshot_id, payload_json, stored_at,
+                        previous_snapshot_hash, snapshot_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        payload.election_id,
+                        version,
+                        snapshot_id,
+                        payload.model_dump_json(),
+                        stored_at.isoformat(),
+                        previous_hash,
+                        snapshot_hash,
+                    ),
+                )
+                connection.commit()
         return snapshot
 
     def history(self, election_id: str) -> list[ElectionRegistrySnapshot]:
