@@ -6,6 +6,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
+from ballotproof.source_automation import (
+    SourceAutomationPlan,
+    SourceAutomationPlanRequest,
+    SourceAutomationRun,
+    SourceAutomationStore,
+)
 from ballotproof.source_ingestion import ProvenanceReceipt, SourceCaptureStore, SourcePolicy
 from ballotproof.source_policy import (
     SourcePolicyChainVerification,
@@ -39,6 +45,11 @@ def get_source_capture_store() -> SourceCaptureStore:
 @lru_cache
 def get_source_scheduler_store() -> SourceSchedulerStore:
     return SourceSchedulerStore(_data_root())
+
+
+@lru_cache
+def get_source_automation_store() -> SourceAutomationStore:
+    return SourceAutomationStore(_data_root())
 
 
 @router.post(
@@ -126,7 +137,7 @@ def reserve_source_request(
     request: SourceReservationRequest,
 ) -> ReservationDecision:
     try:
-        snapshot = get_source_policy_store().get(source_id, request.policy_version)
+        snapshot = get_source_policy_store().latest(source_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     receipts = get_source_capture_store().receipts(source_id)
@@ -135,3 +146,91 @@ def reserve_source_request(
         request=request,
         receipts=receipts,
     )
+
+
+@router.post(
+    "/source-automation/plans",
+    response_model=SourceAutomationPlan,
+    tags=["source-automation"],
+)
+def create_source_automation_plan(
+    request: SourceAutomationPlanRequest,
+) -> SourceAutomationPlan:
+    try:
+        snapshot = get_source_policy_store().latest(request.source_id)
+        return get_source_automation_store().create_plan(snapshot=snapshot, request=request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get(
+    "/source-automation/plans",
+    response_model=list[SourceAutomationPlan],
+    tags=["source-automation"],
+)
+def list_source_automation_plans(source_id: str | None = None) -> list[SourceAutomationPlan]:
+    return get_source_automation_store().plans(source_id)
+
+
+@router.get(
+    "/source-automation/plans/{plan_id}",
+    response_model=SourceAutomationPlan,
+    tags=["source-automation"],
+)
+def get_source_automation_plan(plan_id: str) -> SourceAutomationPlan:
+    try:
+        return get_source_automation_store().get_plan(plan_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/source-automation/plans/{plan_id}/runs",
+    response_model=list[SourceAutomationRun],
+    tags=["source-automation"],
+)
+def source_automation_runs(plan_id: str) -> list[SourceAutomationRun]:
+    try:
+        get_source_automation_store().get_plan(plan_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return get_source_automation_store().runs(plan_id)
+
+
+@router.post(
+    "/source-automation/plans/{plan_id}/pause",
+    response_model=SourceAutomationPlan,
+    tags=["source-automation"],
+)
+def pause_source_automation_plan(plan_id: str) -> SourceAutomationPlan:
+    try:
+        return get_source_automation_store().set_enabled(plan_id, False)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/source-automation/plans/{plan_id}/resume",
+    response_model=SourceAutomationPlan,
+    tags=["source-automation"],
+)
+def resume_source_automation_plan(plan_id: str) -> SourceAutomationPlan:
+    try:
+        plan = get_source_automation_store().get_plan(plan_id)
+        snapshot = get_source_policy_store().latest(plan.source_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if (
+        snapshot.version != plan.policy_version
+        or snapshot.snapshot_hash != plan.policy_snapshot_hash
+        or snapshot.policy.access_status.value != "approved"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="automation plan is not bound to the current approved policy snapshot",
+        )
+    return get_source_automation_store().set_enabled(plan_id, True)
