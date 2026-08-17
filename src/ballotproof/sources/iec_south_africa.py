@@ -13,7 +13,7 @@ IEC_BASE_URL = "https://api.elections.org.za/"
 IEC_ALLOWED_HOST = "api.elections.org.za"
 IEC_TERMS_URL = "https://api.elections.org.za/media/API_TERMS_OF_USE.htm"
 IEC_TRANSPORT_ID = "ballotproof-iec-za-https"
-IEC_TRANSPORT_VERSION = "1"
+IEC_TRANSPORT_VERSION = "2"
 
 
 class IECAdapterModel(BaseModel):
@@ -98,5 +98,9 @@ def build_transport() -> PinnedHTTPSStreamingTransport:
         headers={
             "Accept": "application/json",
             "Authorization": authorization,
+        },
+        public_config={
+            "source_id": IEC_SOURCE_ID,
+            "approved_host": IEC_ALLOWED_HOST,
         },
     )
