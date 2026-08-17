@@ -8,11 +8,9 @@ import threading
 from collections.abc import Sequence
 from pathlib import Path
 
-from ballotproof.source_approval import (
-    ApprovalEnforcingAcquisitionWorker,
-    SourceApprovalStore,
-    trusted_source_approver_keys_from_env,
-)
+from ballotproof.auth import AuthStore
+from ballotproof.source_approval import ApprovalEnforcingAcquisitionWorker
+from ballotproof.source_approval_auth import EnrolledSourceApprovalStore
 from ballotproof.source_worker import ProductionSourceWorker, TransportRegistry, WorkerStateStore
 
 
@@ -39,12 +37,40 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--once", action="store_true", help="Run one due-plan cycle and exit")
     worker.add_argument("--status", action="store_true", help="Print latest worker health and exit")
     worker.add_argument("--stale-after-seconds", type=float, default=30.0)
+
+    auth = subparsers.add_parser("auth", help="Bootstrap BallotProof API authentication")
+    auth_subparsers = auth.add_subparsers(dest="auth_command", required=True)
+    bootstrap = auth_subparsers.add_parser(
+        "bootstrap-admin",
+        help="Create the first admin identity and print its API token once",
+    )
+    bootstrap.add_argument("--actor-id", required=True)
+    bootstrap.add_argument("--display-name")
+    bootstrap.add_argument(
+        "--data-dir",
+        default=os.environ.get("BALLOTPROOF_DATA_DIR", ".ballotproof-data"),
+        help="BallotProof data directory",
+    )
     return parser
 
 
 def run_cli(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "auth":
+        if args.auth_command != "bootstrap-admin":
+            parser.error("unknown auth command")
+        try:
+            issued = AuthStore(Path(args.data_dir)).bootstrap_admin(
+                args.actor_id,
+                display_name=args.display_name,
+            )
+        except (PermissionError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(issued.model_dump(mode="json"), sort_keys=True))
+        return 0
+
     if args.command != "worker":
         parser.error("unknown command")
 
@@ -63,14 +89,9 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
     if not args.transport:
         parser.error("worker execution requires at least one explicit --transport registration")
     try:
-        trusted_keys = trusted_source_approver_keys_from_env()
-        if not trusted_keys:
-            parser.error(
-                "worker execution requires BALLOTPROOF_SOURCE_APPROVER_KEYS_SHA256 "
-                "with at least one trusted Ed25519 public-key fingerprint"
-            )
         registry = TransportRegistry.from_specs(args.transport)
-        approval_store = SourceApprovalStore(root, trusted_signer_keys=trusted_keys)
+        auth_store = AuthStore(root)
+        approval_store = EnrolledSourceApprovalStore(root, auth_store=auth_store)
         acquisition_worker = ApprovalEnforcingAcquisitionWorker(
             root,
             approval_store=approval_store,
