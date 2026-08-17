@@ -61,4 +61,6 @@ A verifier therefore does not need BallotProof's SQLite databases, API credentia
 
 ## Trust boundary
 
-A valid release proves that the signed manifest, exported bytes, and logical record set are mutually consistent. It does not prove that upstream election evidence is complete, authentic, legally obtained, or substantively correct. Those questions remain governed by the evidence chains, source-policy/approval records, attestations, and independent review.
+A valid release proves that the signed manifest, exported bytes, and logical record set are mutually consistent and that the manifest was signed by the private key corresponding to the embedded public key fingerprint. The current release format is self-contained; it does **not** by itself establish that the embedded signing key is an institutionally trusted or officially enrolled BallotProof release key. A separate trusted-key publication or transparency mechanism is required for that assertion.
+
+A valid release also does not prove that upstream election evidence is complete, authentic, legally obtained, or substantively correct. Those questions remain governed by the evidence chains, source-policy/approval records, attestations, and independent review.
