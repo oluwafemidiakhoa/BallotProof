@@ -24,6 +24,7 @@ It is not an election authority, a winner-prediction system, or an AI judge. The
 - Append-only, hash-chained source-policy snapshots.
 - Persisted request reservations enforcing source approval, policy snapshot binding, retry sequencing, exponential backoff, duplicate-attempt protection, and sliding-window request limits.
 - Source policy, receipt, and reservation query APIs exposed on the main FastAPI app.
+- One-shot injected transport execution ledger: no default network client, no implicit retries, and success only after immutable response capture.
 - Fixture-only INEC IReV adapter contract with live transport disabled pending source-specific terms/access review.
 - Next.js public evidence explorer using clearly labelled synthetic data.
 - Python tests and GitHub Actions CI.
@@ -68,7 +69,9 @@ Open `http://127.0.0.1:8000/docs` for the generated API explorer.
 7. `GET /v1/sources/{source_id}/receipts` — inspect captured-response receipts.
 8. `GET /v1/receipts/{receipt_id}` — retrieve one exact provenance receipt.
 
-The source core performs no outbound HTTP requests. A future live adapter must first obtain a persisted reservation and must preserve every response through the immutable receipt pipeline.
+The core still ships no outbound HTTP implementation. A source transport must be explicitly injected into the execution harness. It can run only with an approved policy snapshot and a persisted reservation, and a reservation is consumed exactly once. Successful execution is not recorded until the raw response has produced an immutable provenance receipt.
+
+See [`docs/SOURCE_TRANSPORT.md`](docs/SOURCE_TRANSPORT.md).
 
 ## INEC IReV review
 
@@ -93,6 +96,7 @@ Read:
 - [`docs/ELECTION_REGISTRY.md`](docs/ELECTION_REGISTRY.md)
 - [`docs/SOURCE_INGESTION.md`](docs/SOURCE_INGESTION.md)
 - [`docs/SOURCE_GOVERNANCE.md`](docs/SOURCE_GOVERNANCE.md)
+- [`docs/SOURCE_TRANSPORT.md`](docs/SOURCE_TRANSPORT.md)
 - [`docs/INEC_IREV_REVIEW.md`](docs/INEC_IREV_REVIEW.md)
 
 ## Web
@@ -128,12 +132,13 @@ Completed foundation:
 9. Versioned source-policy ledger and enforced request reservations.
 10. Main API exposure for source-governance routes.
 11. Fixture-only INEC IReV source contract with a quarantined `review_required` policy.
+12. One-shot, dependency-injected source transport execution with immutable response capture.
 
 Next:
 
-1. Resolve IReV-specific Terms of Use, authentication, supported automated-access contract, and rate-limit expectations before any live transport is enabled.
-2. Add a source-policy approval record only if that review supports automated access.
-3. Build a reservation -> HTTP request -> immutable receipt transport harness using a source that is explicitly approved.
+1. Resolve IReV-specific Terms of Use, authentication, supported automated-access contract, and rate-limit expectations before any live IReV transport is enabled.
+2. Approve a source only through a new versioned policy snapshot with documented terms review.
+3. Implement the first real network transport only for a source with an explicit machine-access contract, reusing the reservation -> one-shot execution -> immutable receipt lifecycle.
 4. Add downloadable Parquet/CSV/JSON snapshots and signed manifests.
 5. Add Merkle checkpoints and independent mirror verification.
 6. Add observer/PRVT integrations and operational security hardening.
