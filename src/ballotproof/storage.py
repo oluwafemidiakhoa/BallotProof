@@ -175,69 +175,71 @@ class EvidenceStore:
         evidence_id: str | None = None,
     ) -> EvidenceVersion:
         now = datetime.now(UTC)
-        with self.write_barrier.hold(advance_generation=True):
-            with self._connect() as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                if evidence_id is None:
-                    evidence_id = f"bp_ev_{uuid4().hex}"
-                    version = 1
-                    previous_record_hash = None
-                else:
-                    previous = connection.execute(
-                        """
-                        SELECT version, record_hash FROM evidence_versions
-                        WHERE evidence_id = ? ORDER BY version DESC LIMIT 1
-                        """,
-                        (evidence_id,),
-                    ).fetchone()
-                    if previous is None:
-                        raise KeyError(f"Unknown evidence_id: {evidence_id}")
-                    version = int(previous["version"]) + 1
-                    previous_record_hash = str(previous["record_hash"])
-
-                record_body = {
-                    "evidence_id": evidence_id,
-                    "election_id": election_id,
-                    "polling_unit_code": polling_unit_code,
-                    "document_type": document_type,
-                    "source": source.model_dump(mode="json"),
-                    "version": version,
-                    "artifact_sha256": artifact.sha256,
-                    "artifact_size_bytes": artifact.size_bytes,
-                    "media_type": media_type,
-                    "filename": filename,
-                    "observed_at": observed_at.isoformat(),
-                    "stored_at": now.isoformat(),
-                    "previous_record_hash": previous_record_hash,
-                }
-                record_hash = hash_record(_record_hash_body(record_body))
-                record = EvidenceVersion(**record_body, record_hash=record_hash)
-                connection.execute(
+        with (
+            self.write_barrier.hold(advance_generation=True),
+            self._connect() as connection,
+        ):
+            connection.execute("BEGIN IMMEDIATE")
+            if evidence_id is None:
+                evidence_id = f"bp_ev_{uuid4().hex}"
+                version = 1
+                previous_record_hash = None
+            else:
+                previous = connection.execute(
                     """
-                    INSERT INTO evidence_versions (
-                        evidence_id, version, election_id, polling_unit_code, document_type,
-                        source_json, artifact_sha256, artifact_size_bytes, media_type, filename,
-                        observed_at, stored_at, previous_record_hash, record_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    SELECT version, record_hash FROM evidence_versions
+                    WHERE evidence_id = ? ORDER BY version DESC LIMIT 1
                     """,
-                    (
-                        evidence_id,
-                        version,
-                        election_id,
-                        polling_unit_code,
-                        document_type,
-                        json.dumps(source.model_dump(mode="json"), sort_keys=True),
-                        artifact.sha256,
-                        artifact.size_bytes,
-                        media_type,
-                        filename,
-                        observed_at.isoformat(),
-                        now.isoformat(),
-                        previous_record_hash,
-                        record_hash,
-                    ),
-                )
-                connection.commit()
+                    (evidence_id,),
+                ).fetchone()
+                if previous is None:
+                    raise KeyError(f"Unknown evidence_id: {evidence_id}")
+                version = int(previous["version"]) + 1
+                previous_record_hash = str(previous["record_hash"])
+
+            record_body = {
+                "evidence_id": evidence_id,
+                "election_id": election_id,
+                "polling_unit_code": polling_unit_code,
+                "document_type": document_type,
+                "source": source.model_dump(mode="json"),
+                "version": version,
+                "artifact_sha256": artifact.sha256,
+                "artifact_size_bytes": artifact.size_bytes,
+                "media_type": media_type,
+                "filename": filename,
+                "observed_at": observed_at.isoformat(),
+                "stored_at": now.isoformat(),
+                "previous_record_hash": previous_record_hash,
+            }
+            record_hash = hash_record(_record_hash_body(record_body))
+            record = EvidenceVersion(**record_body, record_hash=record_hash)
+            connection.execute(
+                """
+                INSERT INTO evidence_versions (
+                    evidence_id, version, election_id, polling_unit_code, document_type,
+                    source_json, artifact_sha256, artifact_size_bytes, media_type, filename,
+                    observed_at, stored_at, previous_record_hash, record_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evidence_id,
+                    version,
+                    election_id,
+                    polling_unit_code,
+                    document_type,
+                    json.dumps(source.model_dump(mode="json"), sort_keys=True),
+                    artifact.sha256,
+                    artifact.size_bytes,
+                    media_type,
+                    filename,
+                    observed_at.isoformat(),
+                    now.isoformat(),
+                    previous_record_hash,
+                    record_hash,
+                ),
+            )
+            connection.commit()
         return record
 
     def get_version(self, evidence_id: str, version: int) -> EvidenceVersion:
@@ -279,31 +281,33 @@ class EvidenceStore:
 
     def add_attestation(self, attestation: SignedAttestation) -> None:
         payload = attestation.payload
-        with self.write_barrier.hold(advance_generation=True):
-            with self._connect() as connection:
-                record = connection.execute(
-                    """
-                    SELECT record_hash FROM evidence_versions
-                    WHERE evidence_id = ? AND version = ?
-                    """,
-                    (payload.evidence_id, payload.evidence_version),
-                ).fetchone()
-                if record is None:
-                    raise KeyError("Attestation references an unknown evidence version")
-                if record["record_hash"] != payload.record_hash:
-                    raise ValueError("Attestation record_hash does not match stored evidence")
-                connection.execute(
-                    """
-                    INSERT OR IGNORE INTO attestations (
-                        evidence_id, evidence_version, attestation_json
-                    ) VALUES (?, ?, ?)
-                    """,
-                    (
-                        payload.evidence_id,
-                        payload.evidence_version,
-                        attestation.model_dump_json(),
-                    ),
-                )
+        with (
+            self.write_barrier.hold(advance_generation=True),
+            self._connect() as connection,
+        ):
+            record = connection.execute(
+                """
+                SELECT record_hash FROM evidence_versions
+                WHERE evidence_id = ? AND version = ?
+                """,
+                (payload.evidence_id, payload.evidence_version),
+            ).fetchone()
+            if record is None:
+                raise KeyError("Attestation references an unknown evidence version")
+            if record["record_hash"] != payload.record_hash:
+                raise ValueError("Attestation record_hash does not match stored evidence")
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO attestations (
+                    evidence_id, evidence_version, attestation_json
+                ) VALUES (?, ?, ?)
+                """,
+                (
+                    payload.evidence_id,
+                    payload.evidence_version,
+                    attestation.model_dump_json(),
+                ),
+            )
 
     def attestations(self, evidence_id: str, version: int) -> list[SignedAttestation]:
         with self._connect() as connection:
@@ -338,7 +342,9 @@ class EvidenceStore:
                     superseded.evidence_id != evidence_id
                     or superseded.evidence_version != evidence_version
                 ):
-                    raise ValueError("Superseded extraction must reference the same evidence version")
+                    raise ValueError(
+                        "Superseded extraction must reference the same evidence version"
+                    )
 
             record = ExtractionRecord(
                 extraction_id=f"bp_ex_{uuid4().hex}",
