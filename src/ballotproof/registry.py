@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -226,7 +225,9 @@ class ElectionRegistryStore:
                     previous_snapshot_hash=snapshot.previous_snapshot_hash,
                 )
             )
-            if snapshot.previous_snapshot_hash != previous_hash or snapshot.snapshot_hash != expected:
+            chain_broken = snapshot.previous_snapshot_hash != previous_hash
+            hash_broken = snapshot.snapshot_hash != expected
+            if chain_broken or hash_broken:
                 return RegistryChainVerification(
                     election_id=election_id,
                     valid=False,
