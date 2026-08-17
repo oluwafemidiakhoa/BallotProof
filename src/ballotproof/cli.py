@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ballotproof.auth import AuthStore
+from ballotproof.release_governance import ReleaseGovernanceStore
 from ballotproof.releases import (
     ReleaseProofBundle,
     build_release,
@@ -29,16 +30,20 @@ def _trusted_signers(args) -> set[str] | None:
     return set(values) if values else None
 
 
+def _add_data_dir(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--data-dir",
+        default=os.environ.get("BALLOTPROOF_DATA_DIR", ".ballotproof-data"),
+        help="BallotProof data directory",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ballotproof")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     worker = subparsers.add_parser("worker", help="Run or inspect the automatic source worker")
-    worker.add_argument(
-        "--data-dir",
-        default=os.environ.get("BALLOTPROOF_DATA_DIR", ".ballotproof-data"),
-        help="BallotProof data directory",
-    )
+    _add_data_dir(worker)
     worker.add_argument(
         "--transport",
         action="append",
@@ -61,11 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bootstrap.add_argument("--actor-id", required=True)
     bootstrap.add_argument("--display-name")
-    bootstrap.add_argument(
-        "--data-dir",
-        default=os.environ.get("BALLOTPROOF_DATA_DIR", ".ballotproof-data"),
-        help="BallotProof data directory",
-    )
+    _add_data_dir(bootstrap)
 
     release = subparsers.add_parser("release", help="Create or verify signed election releases")
     release_subparsers = release.add_subparsers(dest="release_command", required=True)
@@ -76,11 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     create_release.add_argument("--election-id", required=True)
     create_release.add_argument("--signing-key", required=True, help="Ed25519 private key PEM")
     create_release.add_argument("--output-dir", required=True)
-    create_release.add_argument(
-        "--data-dir",
-        default=os.environ.get("BALLOTPROOF_DATA_DIR", ".ballotproof-data"),
-        help="BallotProof data directory",
-    )
+    _add_data_dir(create_release)
 
     verify = release_subparsers.add_parser(
         "verify",
@@ -141,6 +138,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help="Require the release signer to match this SHA-256 fingerprint; repeatable",
     )
+
+    checkpoint = release_subparsers.add_parser(
+        "checkpoint-create",
+        help="Create a governed signed checkpoint for a release with an enrolled signing key",
+    )
+    checkpoint.add_argument("release_dir")
+    checkpoint.add_argument("--signing-key", required=True, help="Ed25519 private key PEM")
+    _add_data_dir(checkpoint)
+
+    verify_checkpoint = release_subparsers.add_parser(
+        "checkpoint-verify",
+        help="Verify the signed append-only checkpoint chain for an election",
+    )
+    verify_checkpoint.add_argument("--election-id", required=True)
+    _add_data_dir(verify_checkpoint)
+
+    verify_transparency = release_subparsers.add_parser(
+        "key-transparency-verify",
+        help="Verify the append-only release signing-key transparency ledger",
+    )
+    _add_data_dir(verify_transparency)
     return parser
 
 
@@ -222,6 +240,27 @@ def _run_release(args, parser: argparse.ArgumentParser) -> int:
             parser.error(str(exc))
         print(json.dumps(publication.model_dump(mode="json"), sort_keys=True))
         return 0
+    if args.release_command == "checkpoint-create":
+        try:
+            key = load_ed25519_private_key(args.signing_key)
+            checkpoint = ReleaseGovernanceStore(args.data_dir).append_checkpoint(
+                args.release_dir,
+                key,
+            )
+        except (KeyError, OSError, PermissionError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(checkpoint.model_dump(mode="json"), sort_keys=True))
+        return 0
+    if args.release_command == "checkpoint-verify":
+        verification = ReleaseGovernanceStore(args.data_dir).verify_checkpoint_chain(
+            args.election_id
+        )
+        print(json.dumps(verification.model_dump(mode="json"), sort_keys=True))
+        return 0 if verification.valid else 1
+    if args.release_command == "key-transparency-verify":
+        verification = ReleaseGovernanceStore(args.data_dir).verify_release_key_transparency()
+        print(json.dumps(verification.model_dump(mode="json"), sort_keys=True))
+        return 0 if verification.valid else 1
     parser.error("unknown release command")
     return 2
 
