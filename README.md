@@ -19,6 +19,8 @@ It is not an election authority, a winner-prediction system, or an AI judge. The
 - Deterministic arithmetic/accreditation checks and source-to-source reconciliation.
 - Source-neutral single-edge and multi-level collation replay with explicit expected units, completeness, missing/unexpected inputs, computed totals, and declared-result deltas.
 - Multi-level replay refuses to promote incomplete child collations into parent totals.
+- Append-only election registry snapshots for offices, candidates, expected units, topology, and source provenance.
+- Registry snapshot hash chains so candidate lists and expected polling-unit topology can change without erasing history.
 - Next.js public evidence explorer using clearly labelled synthetic data.
 - Python tests and GitHub Actions CI.
 
@@ -35,21 +37,22 @@ pip install -e '.[dev]'
 uvicorn apps.api.main:app --reload
 ```
 
-Set `BALLOTPROOF_DATA_DIR` to choose where immutable objects and the SQLite ledger are stored. The default is `.ballotproof-data`.
+Set `BALLOTPROOF_DATA_DIR` to choose where immutable objects and the SQLite ledgers are stored. The default is `.ballotproof-data`.
 
 Open `http://127.0.0.1:8000/docs` for the generated API explorer.
 
 ### Public evidence workflow
 
-1. `POST /v1/evidence/ingest` — retain the source artifact and create an evidence version.
-2. `POST /v1/extractions` — append model output tied to the exact evidence record hash.
-3. `POST /v1/extractions/{extraction_id}/reviews` — append human review without overwriting machine output.
-4. `POST /v1/attestations` — verify and retain an Ed25519-signed actor statement.
-5. `GET /v1/elections/{election_id}/polling-units/{polling_unit_code}` — retrieve the complete public evidence bundle.
-6. `POST /v1/collation/replay` — reproduce one aggregation edge from an explicit expected unit set.
-7. `POST /v1/collation/replay-graph` — replay a multi-level collation DAG without silently promoting incomplete child nodes.
+1. `POST /v1/registry/snapshots` — append a versioned election-registry snapshot.
+2. `POST /v1/evidence/ingest` — retain the source artifact and create an evidence version.
+3. `POST /v1/extractions` — append model output tied to the exact evidence record hash.
+4. `POST /v1/extractions/{extraction_id}/reviews` — append human review without overwriting machine output.
+5. `POST /v1/attestations` — verify and retain an Ed25519-signed actor statement.
+6. `GET /v1/elections/{election_id}/polling-units/{polling_unit_code}` — retrieve the complete public evidence bundle.
+7. `POST /v1/collation/replay` — reproduce one aggregation edge from an explicit expected unit set.
+8. `POST /v1/collation/replay-graph` — replay a multi-level collation DAG without silently promoting incomplete child nodes.
 
-The original fingerprint-only endpoint remains available at `POST /v1/evidence/fingerprint` for clients that want hashing without persistence.
+Registry reads are available at `GET /v1/registry/{election_id}`, `/history`, and `/chain`. The fingerprint-only endpoint remains available at `POST /v1/evidence/fingerprint`.
 
 ## Trust model
 
@@ -65,6 +68,7 @@ Read:
 - [`docs/EXTRACTION_REVIEW.md`](docs/EXTRACTION_REVIEW.md)
 - [`docs/EXTRACTION_ADAPTERS.md`](docs/EXTRACTION_ADAPTERS.md)
 - [`docs/COLLATION_REPLAY.md`](docs/COLLATION_REPLAY.md)
+- [`docs/ELECTION_REGISTRY.md`](docs/ELECTION_REGISTRY.md)
 
 ## Web
 
@@ -94,11 +98,12 @@ Completed foundation:
 4. Public evidence explorer contract.
 5. Provider-neutral extraction adapter manifests.
 6. Single-edge and multi-level collation replay with conservative completeness propagation.
+7. Versioned election registry with source provenance and hash-chained snapshots.
 
 Next:
 
-1. Versioned election registry for offices, candidates, expected polling units, and collation topology.
-2. Real source adapters with rate limiting, provenance receipts, and source-policy review.
+1. Real source-adapter framework with rate limiting, provenance receipts, and source-policy review.
+2. Registry-aware replay helpers that derive expected units from a chosen snapshot rather than caller-supplied lists.
 3. Downloadable Parquet/CSV/JSON snapshots and signed manifests.
 4. Merkle checkpoints and independent mirror verification.
 5. Observer/PRVT integrations and operational security hardening.
