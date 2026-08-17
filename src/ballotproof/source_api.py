@@ -6,6 +6,13 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
+from ballotproof.source_approval import (
+    SignedSourceApproval,
+    SourceApprovalAuthorization,
+    SourceApprovalChainVerification,
+    SourceApprovalStore,
+    trusted_source_approver_keys_from_env,
+)
 from ballotproof.source_automation import (
     SourceAutomationPlan,
     SourceAutomationPlanRequest,
@@ -36,6 +43,15 @@ def _data_root() -> Path:
 @lru_cache
 def get_source_policy_store() -> SourcePolicyStore:
     return SourcePolicyStore(_data_root())
+
+
+@lru_cache
+def get_source_approval_store() -> SourceApprovalStore:
+    return SourceApprovalStore(
+        _data_root(),
+        policy_store=get_source_policy_store(),
+        trusted_signer_keys=trusted_source_approver_keys_from_env(),
+    )
 
 
 @lru_cache
@@ -103,6 +119,56 @@ def source_policy_chain(source_id: str) -> SourcePolicyChainVerification:
     return verification
 
 
+@router.post(
+    "/source-approvals",
+    response_model=SignedSourceApproval,
+    tags=["source-governance"],
+)
+def append_source_approval(event: SignedSourceApproval) -> SignedSourceApproval:
+    try:
+        return get_source_approval_store().append(event)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get(
+    "/sources/{source_id}/approvals",
+    response_model=list[SignedSourceApproval],
+    tags=["source-governance"],
+)
+def source_approvals(source_id: str) -> list[SignedSourceApproval]:
+    return get_source_approval_store().history(source_id)
+
+
+@router.get(
+    "/sources/{source_id}/approval-chain",
+    response_model=SourceApprovalChainVerification,
+    tags=["source-governance"],
+)
+def source_approval_chain(source_id: str) -> SourceApprovalChainVerification:
+    verification = get_source_approval_store().verify_chain(source_id)
+    if verification.events_checked == 0:
+        raise HTTPException(status_code=404, detail="No source approval events")
+    return verification
+
+
+@router.get(
+    "/source-policies/{source_id}/authorization",
+    response_model=SourceApprovalAuthorization,
+    tags=["source-governance"],
+)
+def source_policy_authorization(source_id: str) -> SourceApprovalAuthorization:
+    try:
+        snapshot = get_source_policy_store().latest(source_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return get_source_approval_store().authorization(snapshot)
+
+
 @router.get(
     "/sources/{source_id}/receipts",
     response_model=list[ProvenanceReceipt],
@@ -144,8 +210,11 @@ def reserve_source_request(
 ) -> ReservationDecision:
     try:
         snapshot = get_source_policy_store().latest(source_id)
+        get_source_approval_store().require_authorized(snapshot)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     receipts = get_source_capture_store().receipts(source_id)
     return get_source_scheduler_store().reserve(
         snapshot=snapshot,
@@ -164,6 +233,7 @@ def create_source_automation_plan(
 ) -> SourceAutomationPlan:
     try:
         snapshot = get_source_policy_store().latest(request.source_id)
+        get_source_approval_store().require_authorized(snapshot)
         return get_source_automation_store().create_plan(snapshot=snapshot, request=request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -239,6 +309,10 @@ def resume_source_automation_plan(plan_id: str) -> SourceAutomationPlan:
             status_code=409,
             detail="automation plan is not bound to the current approved policy snapshot",
         )
+    try:
+        get_source_approval_store().require_authorized(snapshot)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     return get_source_automation_store().set_enabled(plan_id, True)
 
 
