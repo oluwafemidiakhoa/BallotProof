@@ -60,7 +60,9 @@ class SourcePolicy(SourceModel):
         if self.access_status is SourceAccessStatus.APPROVED and self.base_url is None:
             raise ValueError("approved sources require base_url")
 
-        normalized_hosts = list(dict.fromkeys(_normalize_policy_host(host) for host in self.allowed_hosts))
+        normalized_hosts = list(
+            dict.fromkeys(_normalize_policy_host(host) for host in self.allowed_hosts)
+        )
         if self.base_url is not None:
             if self.base_url.host is None:
                 raise ValueError("base_url must contain a hostname")
