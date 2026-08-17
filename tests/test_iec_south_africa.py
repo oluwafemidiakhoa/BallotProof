@@ -47,4 +47,4 @@ def test_transport_factory_builds_only_after_both_operator_gates(monkeypatch):
     monkeypatch.setenv("BALLOTPROOF_IEC_AUTHORIZATION", "credential")
     transport = build_transport()
     assert transport.transport_id == "ballotproof-iec-za-https"
-    assert transport.transport_version == "1"
+    assert transport.transport_version == "2"
