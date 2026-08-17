@@ -339,9 +339,18 @@ class SourceTransportExecutor:
     def _claim(
         self,
         reservation: SourceRequestReservation,
-        provenance: TransportProvenance,
-        started_at: datetime,
+        provenance: TransportProvenance | datetime,
+        started_at: datetime | None = None,
     ) -> None:
+        provenance_record: TransportProvenance | None
+        if isinstance(provenance, datetime):
+            provenance_record = None
+            started_at = provenance
+        else:
+            provenance_record = provenance
+        if started_at is None:
+            raise ValueError("started_at is required")
+
         try:
             with self._connect() as connection:
                 connection.execute(
@@ -358,10 +367,14 @@ class SourceTransportExecutor:
                         reservation.request_key,
                         reservation.attempt,
                         reservation.policy_snapshot_hash,
-                        provenance.transport_id,
-                        provenance.transport_version,
-                        provenance.transport_config_hash,
-                        provenance.kind,
+                        None if provenance_record is None else provenance_record.transport_id,
+                        None if provenance_record is None else provenance_record.transport_version,
+                        (
+                            None
+                            if provenance_record is None
+                            else provenance_record.transport_config_hash
+                        ),
+                        None if provenance_record is None else provenance_record.kind,
                         TransportExecutionStatus.CLAIMED.value,
                         started_at.isoformat(),
                     ),
