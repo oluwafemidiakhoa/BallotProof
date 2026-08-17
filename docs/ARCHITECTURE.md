@@ -1,24 +1,6 @@
 # Architecture
 
-## v0.1
-
-```text
-Evidence artifact
-      |
-      v
-Fingerprint endpoint ----> SHA-256 + size + media metadata
-      |
-      v
-Structured result sheet
-      |
-      +----> deterministic validation rules
-      |
-      +----> source-to-source reconciliation
-```
-
-The v0.1 repository intentionally contains no automated winner declaration and no opaque confidence score.
-
-## Target architecture
+## Current architecture
 
 ```text
 Official publications   Observers   Partners
@@ -26,26 +8,65 @@ Official publications   Observers   Partners
           +----------- Ingestion API -----------+
                                                    |
                                              Evidence store
+                                     /             |             \
+                              SHA-256 objects   SQLite ledger   attestations
+                                     \             |             /
                                                    |
-                                           immutable versions
+                                        immutable evidence versions
                                                    |
-                                      extraction / OCR workers
+                                         extraction records
+                                                   |
+                                           human reviews
                                                    |
                                     deterministic validation
                                                    |
-                             PU -> Ward -> LGA -> State replay
+                                      source reconciliation
                                                    |
-                                  discrepancy event stream
+                                  polling-unit evidence bundle
                                                    |
-                       Public API / web / datasets / researchers
+                                  Public API / Next.js explorer
 ```
 
-## Planned storage model
+The current implementation intentionally contains no automated winner declaration and no opaque credibility score.
 
-- PostgreSQL for metadata, claims, attestations, and reconciliation state.
-- S3-compatible object storage for original evidence artifacts.
-- SHA-256 for artifact fingerprints.
-- Ed25519 signatures for signed attestations and release manifests.
-- Merkle roots for independently checkpointing election snapshots.
+## Storage and provenance
+
+The development implementation uses:
+
+- content-addressed local object storage for original evidence artifacts;
+- SQLite for append-only evidence metadata, extraction records, reviews, and attestations;
+- SHA-256 for artifact fingerprints and evidence-record hash chains;
+- Ed25519 for signed attestations.
+
+Artifact bytes and evidence metadata are separated. A source revision creates another evidence version rather than mutating the previous record.
+
+## Production evolution
+
+The storage interfaces are intentionally simple enough to migrate without changing the public evidence contract. A production deployment can replace local objects and SQLite with:
+
+- S3-compatible object storage for immutable artifact bytes;
+- PostgreSQL for metadata, claims, reviews, attestations, and reconciliation state;
+- background workers for OCR/vision extraction;
+- signed snapshot manifests and Merkle checkpoints for independent mirrors.
+
+## Next architecture layer
+
+```text
+Polling-unit evidence
+       |
+       v
+Ward reconciliation
+       |
+       v
+LGA reconciliation
+       |
+       v
+State / constituency reconciliation
+       |
+       v
+Declared-result comparison
+```
+
+Each aggregation edge should expose its inputs, arithmetic, missing units, and discrepancies. BallotProof must not silently choose which disagreeing source is authoritative.
 
 Blockchain is not required for the core trust model.
