@@ -4,13 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ballotproof"
-version = "0.1.0"
+version = "0.2.0"
 description = "Independent, reproducible election evidence verification primitives."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Oluwafemi Idiakhoa" }]
 dependencies = [
+  "cryptography>=49,<50",
   "fastapi>=0.115,<2",
   "pydantic>=2.9,<3",
   "python-multipart>=0.0.20,<1",
