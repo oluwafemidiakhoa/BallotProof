@@ -6,13 +6,13 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
+from ballotproof.auth_api import get_auth_store
 from ballotproof.source_approval import (
     SignedSourceApproval,
     SourceApprovalAuthorization,
     SourceApprovalChainVerification,
-    SourceApprovalStore,
-    trusted_source_approver_keys_from_env,
 )
+from ballotproof.source_approval_auth import EnrolledSourceApprovalStore
 from ballotproof.source_automation import (
     SourceAutomationPlan,
     SourceAutomationPlanRequest,
@@ -46,11 +46,11 @@ def get_source_policy_store() -> SourcePolicyStore:
 
 
 @lru_cache
-def get_source_approval_store() -> SourceApprovalStore:
-    return SourceApprovalStore(
+def get_source_approval_store() -> EnrolledSourceApprovalStore:
+    return EnrolledSourceApprovalStore(
         _data_root(),
         policy_store=get_source_policy_store(),
-        trusted_signer_keys=trusted_source_approver_keys_from_env(),
+        auth_store=get_auth_store(),
     )
 
 
