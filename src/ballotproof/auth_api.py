@@ -21,6 +21,14 @@ from ballotproof.auth import (
     Permission,
     Role,
 )
+from ballotproof.release_governance import (
+    CheckpointChainVerification,
+    ReleaseGovernanceStore,
+    ReleaseKeyEvent,
+    ReleaseKeyTransparencyVerification,
+    ReleaseSigningKey,
+    SignedReleaseCheckpoint,
+)
 
 router = APIRouter(prefix="/v1")
 _bearer = HTTPBearer(auto_error=False)
@@ -50,6 +58,12 @@ class ApproverKeyCreateRequest(AuthRequestModel):
     public_key_b64: str = Field(min_length=1, max_length=256)
 
 
+class ReleaseSigningKeyCreateRequest(AuthRequestModel):
+    actor_id: str = Field(min_length=1, max_length=256)
+    public_key_b64: str = Field(min_length=1, max_length=256)
+    label: str | None = Field(default=None, max_length=256)
+
+
 def _data_root() -> Path:
     return Path(os.environ.get("BALLOTPROOF_DATA_DIR", ".ballotproof-data"))
 
@@ -57,6 +71,11 @@ def _data_root() -> Path:
 @lru_cache
 def get_auth_store() -> AuthStore:
     return AuthStore(_data_root())
+
+
+@lru_cache
+def get_release_governance_store() -> ReleaseGovernanceStore:
+    return ReleaseGovernanceStore(_data_root(), auth_store=get_auth_store())
 
 
 def current_principal(
@@ -242,3 +261,98 @@ def revoke_approver_key(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post(
+    "/governance/release-signing-keys",
+    response_model=ReleaseSigningKey,
+    tags=["release-governance"],
+)
+def enroll_release_signing_key(
+    request: ReleaseSigningKeyCreateRequest,
+    principal: Annotated[
+        AuthenticatedPrincipal,
+        Depends(require_permission(Permission.MANAGE_APPROVER_KEYS)),
+    ],
+) -> ReleaseSigningKey:
+    try:
+        return get_release_governance_store().enroll_release_signing_key(
+            actor_id=request.actor_id,
+            public_key_b64=request.public_key_b64,
+            label=request.label,
+            performed_by=principal.actor_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get(
+    "/governance/release-signing-keys",
+    response_model=list[ReleaseSigningKey],
+    tags=["release-governance"],
+)
+def list_release_signing_keys() -> list[ReleaseSigningKey]:
+    return get_release_governance_store().release_signing_keys()
+
+
+@router.post(
+    "/governance/release-signing-keys/{key_id}/revoke",
+    response_model=ReleaseSigningKey,
+    tags=["release-governance"],
+)
+def revoke_release_signing_key(
+    key_id: str,
+    principal: Annotated[
+        AuthenticatedPrincipal,
+        Depends(require_permission(Permission.MANAGE_APPROVER_KEYS)),
+    ],
+) -> ReleaseSigningKey:
+    try:
+        return get_release_governance_store().revoke_release_signing_key(
+            key_id,
+            performed_by=principal.actor_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get(
+    "/governance/release-key-events",
+    response_model=list[ReleaseKeyEvent],
+    tags=["release-governance"],
+)
+def list_release_key_events() -> list[ReleaseKeyEvent]:
+    return get_release_governance_store().release_key_events()
+
+
+@router.get(
+    "/governance/release-key-events/verify",
+    response_model=ReleaseKeyTransparencyVerification,
+    tags=["release-governance"],
+)
+def verify_release_key_events() -> ReleaseKeyTransparencyVerification:
+    return get_release_governance_store().verify_release_key_transparency()
+
+
+@router.get(
+    "/governance/release-checkpoints/{election_id}",
+    response_model=list[SignedReleaseCheckpoint],
+    tags=["release-governance"],
+)
+def list_release_checkpoints(election_id: str) -> list[SignedReleaseCheckpoint]:
+    return get_release_governance_store().checkpoints(election_id)
+
+
+@router.get(
+    "/governance/release-checkpoints/{election_id}/verify",
+    response_model=CheckpointChainVerification,
+    tags=["release-governance"],
+)
+def verify_release_checkpoints(election_id: str) -> CheckpointChainVerification:
+    return get_release_governance_store().verify_checkpoint_chain(election_id)
