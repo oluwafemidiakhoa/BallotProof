@@ -40,7 +40,10 @@ class RegistryReplayReport(StrictModel):
     replay: CollationReplayReport
 
 
-def _select_snapshot(store: ElectionRegistryStore, request: RegistryReplayRequest) -> ElectionRegistrySnapshot:
+def _select_snapshot(
+    store: ElectionRegistryStore,
+    request: RegistryReplayRequest,
+) -> ElectionRegistrySnapshot:
     matches = [
         snapshot
         for snapshot in store.history(request.election_id)
