@@ -6,7 +6,7 @@ import os
 import sqlite3
 import time
 from collections.abc import Callable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
@@ -24,6 +24,7 @@ class WorkerModel(BaseModel):
 class WorkerStatus(StrEnum):
     STARTING = "starting"
     RUNNING = "running"
+    STANDBY = "standby"
     STOPPED = "stopped"
     FAILED = "failed"
 
@@ -47,6 +48,13 @@ class WorkerHealthReport(WorkerModel):
     heartbeat_age_seconds: float = Field(ge=0)
     stale_after_seconds: float = Field(gt=0)
     healthy: bool
+
+
+class WorkerLeaderLease(WorkerModel):
+    lease_name: str = "source-acquisition"
+    worker_id: str = Field(min_length=1, max_length=128)
+    acquired_at: datetime
+    expires_at: datetime
 
 
 class WorkerStateStore:
@@ -150,9 +158,11 @@ class WorkerStateStore:
         now = evaluated_at or datetime.now(UTC)
         state = self.latest()
         age = max(0.0, (now - state.heartbeat_at).total_seconds())
-        healthy = state.status in {WorkerStatus.STARTING, WorkerStatus.RUNNING} and (
-            age <= stale_after_seconds
-        )
+        healthy = state.status in {
+            WorkerStatus.STARTING,
+            WorkerStatus.RUNNING,
+            WorkerStatus.STANDBY,
+        } and age <= stale_after_seconds
         return WorkerHealthReport(
             worker=state,
             evaluated_at=now,
@@ -183,6 +193,115 @@ class WorkerStateStore:
             registered_sources=json.loads(row["registered_sources_json"]),
             processed_runs=row["processed_runs"],
         )
+
+
+class WorkerLeaseStore:
+    LEASE_NAME = "source-acquisition"
+
+    def __init__(self, root: str | Path) -> None:
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.db_path = self.root / "source_worker.sqlite3"
+        with self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS source_worker_leases (
+                    lease_name TEXT PRIMARY KEY,
+                    worker_id TEXT NOT NULL,
+                    acquired_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                )
+                """
+            )
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.db_path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 5000")
+        return connection
+
+    def try_acquire(
+        self,
+        worker_id: str,
+        *,
+        evaluated_at: datetime | None = None,
+        lease_seconds: float = 3600.0,
+    ) -> WorkerLeaderLease | None:
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        now = evaluated_at or datetime.now(UTC)
+        expires_at = now + timedelta(seconds=lease_seconds)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM source_worker_leases WHERE lease_name = ?",
+                (self.LEASE_NAME,),
+            ).fetchone()
+            if row is not None:
+                current_expires = datetime.fromisoformat(row["expires_at"])
+                if current_expires > now and row["worker_id"] != worker_id:
+                    connection.rollback()
+                    return None
+                acquired_at = (
+                    datetime.fromisoformat(row["acquired_at"])
+                    if row["worker_id"] == worker_id and current_expires > now
+                    else now
+                )
+            else:
+                acquired_at = now
+
+            lease = WorkerLeaderLease(
+                worker_id=worker_id,
+                acquired_at=acquired_at,
+                expires_at=expires_at,
+            )
+            connection.execute(
+                """
+                INSERT INTO source_worker_leases (
+                    lease_name, worker_id, acquired_at, expires_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(lease_name) DO UPDATE SET
+                    worker_id = excluded.worker_id,
+                    acquired_at = excluded.acquired_at,
+                    expires_at = excluded.expires_at
+                """,
+                (
+                    lease.lease_name,
+                    lease.worker_id,
+                    lease.acquired_at.isoformat(),
+                    lease.expires_at.isoformat(),
+                ),
+            )
+            connection.commit()
+        return lease
+
+    def release(self, worker_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM source_worker_leases
+                WHERE lease_name = ? AND worker_id = ?
+                """,
+                (self.LEASE_NAME, worker_id),
+            )
+        return cursor.rowcount > 0
+
+    def active(self, *, evaluated_at: datetime | None = None) -> WorkerLeaderLease | None:
+        now = evaluated_at or datetime.now(UTC)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM source_worker_leases WHERE lease_name = ?",
+                (self.LEASE_NAME,),
+            ).fetchone()
+        if row is None:
+            return None
+        lease = WorkerLeaderLease(
+            lease_name=row["lease_name"],
+            worker_id=row["worker_id"],
+            acquired_at=datetime.fromisoformat(row["acquired_at"]),
+            expires_at=datetime.fromisoformat(row["expires_at"]),
+        )
+        return None if lease.expires_at <= now else lease
 
 
 class TransportRegistry:
@@ -245,6 +364,8 @@ def load_transport_spec(spec: str) -> tuple[str, SourceTransport]:
 
 
 class ProductionSourceWorker:
+    MAX_BATCH_LIMIT = 20
+
     def __init__(
         self,
         root: str | Path,
@@ -253,20 +374,29 @@ class ProductionSourceWorker:
         worker_id: str | None = None,
         poll_seconds: float = 5.0,
         batch_limit: int = 20,
+        lease_seconds: float = 3600.0,
         acquisition_worker: AutomaticAcquisitionWorker | None = None,
         state_store: WorkerStateStore | None = None,
+        lease_store: WorkerLeaseStore | None = None,
     ) -> None:
         if poll_seconds < 1:
             raise ValueError("poll_seconds must be at least 1 second")
-        if batch_limit < 1:
-            raise ValueError("batch_limit must be positive")
+        if not 1 <= batch_limit <= self.MAX_BATCH_LIMIT:
+            raise ValueError(f"batch_limit must be between 1 and {self.MAX_BATCH_LIMIT}")
+        minimum_lease_seconds = batch_limit * 120 + 60
+        if lease_seconds < minimum_lease_seconds:
+            raise ValueError(
+                "lease_seconds must cover the worst-case policy timeout window for the batch"
+            )
         self.root = Path(root)
         self.registry = registry
         self.worker_id = worker_id or f"bp_worker_{uuid4().hex}"
         self.poll_seconds = poll_seconds
         self.batch_limit = batch_limit
+        self.lease_seconds = lease_seconds
         self.acquisition_worker = acquisition_worker or AutomaticAcquisitionWorker(self.root)
         self.state_store = state_store or WorkerStateStore(self.root)
+        self.lease_store = lease_store or WorkerLeaseStore(self.root)
 
     def run_once(self, *, evaluated_at: datetime | None = None) -> list[SourceAutomationRun]:
         now = evaluated_at or datetime.now(UTC)
@@ -282,6 +412,24 @@ class ProductionSourceWorker:
             }
         )
         self.state_store.save(state)
+        lease = self.lease_store.try_acquire(
+            self.worker_id,
+            evaluated_at=now,
+            lease_seconds=self.lease_seconds,
+        )
+        if lease is None:
+            standby_at = datetime.now(UTC) if evaluated_at is None else now
+            self.state_store.save(
+                state.model_copy(
+                    update={
+                        "status": WorkerStatus.STANDBY,
+                        "heartbeat_at": standby_at,
+                        "last_cycle_completed_at": standby_at,
+                    }
+                )
+            )
+            return []
+
         try:
             runs = self.acquisition_worker.run_due(
                 self.registry.transports,
@@ -301,6 +449,8 @@ class ProductionSourceWorker:
                 )
             )
             raise
+        finally:
+            self.lease_store.release(self.worker_id)
 
         completed_at = datetime.now(UTC) if evaluated_at is None else now
         self.state_store.save(
@@ -339,6 +489,7 @@ class ProductionSourceWorker:
             self.stop()
 
     def stop(self) -> WorkerState:
+        self.lease_store.release(self.worker_id)
         now = datetime.now(UTC)
         state = self._state(now).model_copy(
             update={

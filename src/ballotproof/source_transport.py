@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import BinaryIO, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
@@ -38,6 +39,8 @@ class TransportRequest(TransportModel):
 
 
 class TransportResponse(TransportModel):
+    """Legacy in-memory response retained for fixture and adapter compatibility."""
+
     status_code: int = Field(ge=100, le=599)
     body: bytes
     received_at: datetime
@@ -46,10 +49,39 @@ class TransportResponse(TransportModel):
     last_modified: str | None = Field(default=None, max_length=1000)
 
 
+@dataclass(slots=True)
+class StreamingTransportResponse:
+    """Streaming response for bounded capture without materializing the body in memory."""
+
+    status_code: int
+    stream: BinaryIO
+    received_at: datetime
+    media_type: str | None = None
+    etag: str | None = None
+    last_modified: str | None = None
+    close_stream: bool = True
+
+    def __post_init__(self) -> None:
+        if not 100 <= self.status_code <= 599:
+            raise ValueError("streaming response status_code must be a valid HTTP status")
+        if not callable(getattr(self.stream, "read", None)):
+            raise TypeError("streaming response stream must provide read(size) -> bytes")
+        for value, maximum, field_name in (
+            (self.media_type, 256, "media_type"),
+            (self.etag, 1000, "etag"),
+            (self.last_modified, 1000, "last_modified"),
+        ):
+            if value is not None and len(value) > maximum:
+                raise ValueError(f"streaming response {field_name} exceeds {maximum} characters")
+
+
 class SourceTransport(Protocol):
     """Injected transport contract. BallotProof intentionally ships no default network client."""
 
-    def send(self, request: TransportRequest) -> TransportResponse: ...
+    def send(
+        self,
+        request: TransportRequest,
+    ) -> TransportResponse | StreamingTransportResponse: ...
 
 
 class TransportExecutionStatus(StrEnum):
@@ -159,13 +191,10 @@ class SourceTransportExecutor:
             )
             raise
 
+        stream, close_stream = self._response_stream(response)
         try:
-            if len(response.body) > effective_max_bytes:
-                raise ValueError(
-                    f"source response exceeds {effective_max_bytes} byte limit"
-                )
             captured = self.capture_store.capture(
-                stream=_BytesReader(response.body),
+                stream=stream,
                 policy=policy,
                 request=CaptureRequest(
                     source_id=reservation.source_id,
@@ -190,6 +219,11 @@ class SourceTransportExecutor:
                 error_code="capture_exception",
             )
             raise
+        finally:
+            if close_stream:
+                close = getattr(stream, "close", None)
+                if callable(close):
+                    close()
 
         self._finish(
             reservation.reservation_id,
@@ -197,6 +231,14 @@ class SourceTransportExecutor:
             receipt_id=captured.receipt.receipt_id,
         )
         return captured
+
+    @staticmethod
+    def _response_stream(
+        response: TransportResponse | StreamingTransportResponse,
+    ) -> tuple[BinaryIO, bool]:
+        if isinstance(response, TransportResponse):
+            return _BytesReader(response.body), False
+        return response.stream, response.close_stream
 
     def _validate_binding(
         self,

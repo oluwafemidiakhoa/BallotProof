@@ -30,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     worker.add_argument("--poll-seconds", type=float, default=5.0)
     worker.add_argument("--batch-limit", type=int, default=20)
+    worker.add_argument("--lease-seconds", type=float, default=3600.0)
     worker.add_argument("--once", action="store_true", help="Run one due-plan cycle and exit")
     worker.add_argument("--status", action="store_true", help="Print latest worker health and exit")
     worker.add_argument("--stale-after-seconds", type=float, default=30.0)
@@ -63,6 +64,7 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
             registry=registry,
             poll_seconds=args.poll_seconds,
             batch_limit=args.batch_limit,
+            lease_seconds=args.lease_seconds,
         )
     except (ImportError, AttributeError, TypeError, ValueError) as exc:
         parser.error(str(exc))
