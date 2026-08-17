@@ -27,13 +27,11 @@ The reviewed-evidence digest proves which bytes or document representation the a
 
 ## Trust roots
 
-Production/API approval uses the operator-configured environment variable:
+Production trust is resolved from explicit approver-key enrollment in `auth.sqlite3`. An Ed25519 public key is enrolled to one active `governance_reviewer` identity, and the source-approval signer fingerprint plus `approver_id` must match that enrollment.
 
-`BALLOTPROOF_SOURCE_APPROVER_KEYS_SHA256`
+The source-approval HTTP write also requires an authenticated principal with `manage_approvals`, and the submitted `approver_id` must equal the authenticated actor. Arbitrary self-signed approvals and approvals signed by another actor's key are rejected.
 
-Its value is a comma-separated set of trusted Ed25519 public-key SHA-256 fingerprints. A submitted event whose signer is outside that trust set is rejected. The production worker refuses to start without at least one configured approval trust root.
-
-`approver_id` is descriptive governance metadata in v0.18. It is not yet a cryptographically enrolled user identity. Authentication/RBAC and explicit user-to-key enrollment are the next milestone.
+The older `BALLOTPROOF_SOURCE_APPROVER_KEYS_SHA256` environment allowlist remains only as a compatibility helper for lower-level/offline `SourceApprovalStore` use. The v0.19 production API and CLI worker do not use it as their authorization boundary.
 
 ## Authorization semantics
 
@@ -42,16 +40,18 @@ A policy snapshot is authorized only when:
 - its source policy status is `approved`;
 - the latest approval event for the exact policy version and snapshot hash is `approve`;
 - the event signature and event hash verify;
-- the signer key is trusted in the active trust configuration; and
+- the signer key is currently active and enrolled to the event's `approver_id`; and
 - the entire per-source approval chain verifies.
 
 A signed `revoke` event immediately disables the corresponding snapshot. A new policy snapshot also requires a new approval because approval is bound to the exact policy hash.
 
+Revoking an enrolled approver key does not erase historical signatures: the old event remains cryptographically verifiable, but it is no longer sufficient for **current** production authorization.
+
 ## API and worker gates
 
-The source-governance API exposes approval history, chain verification, and current authorization state. Manual reservations, automation-plan creation, and plan resume require a current trusted approval.
+The source-governance API exposes approval history, chain verification, and current authorization state. Manual reservations, automation-plan creation, and plan resume require a current enrolled approval in addition to RBAC on the mutation route.
 
-The CLI production worker uses `ApprovalEnforcingAcquisitionWorker`, which disables a due plan before reservation/network acquisition when approval is absent, untrusted, invalid, or revoked.
+The CLI production worker uses `ApprovalEnforcingAcquisitionWorker` with the persistent enrolled-key resolver, which disables a due plan before reservation/network acquisition when approval is absent, unenrolled, invalid, or revoked.
 
 The lower-level scheduler and acquisition primitives remain independently testable for deterministic/offline workflows. They are not the production authorization boundary.
 
