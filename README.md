@@ -21,7 +21,10 @@ It is not an election authority, a winner-prediction system, or an AI judge. The
 - Multi-level replay refuses to promote incomplete child collations into parent totals.
 - Append-only election registry snapshots for offices, candidates, expected units, topology, and source provenance.
 - Registry-bound replay that derives expected children from an exact registry version and snapshot hash.
-- Governed source-capture framework with policy status, retry/rate-limit metadata, immutable raw-response capture, and provenance receipts.
+- Governed source-capture framework with immutable raw-response capture and provenance receipts.
+- Append-only, hash-chained source-policy snapshots.
+- Persisted source-request reservations that enforce policy approval, snapshot binding, retry sequencing, exponential backoff, and sliding-window request limits.
+- Source policy, receipt, and reservation query APIs.
 - Next.js public evidence explorer using clearly labelled synthetic data.
 - Python tests and GitHub Actions CI.
 
@@ -54,9 +57,18 @@ Open `http://127.0.0.1:8000/docs` for the generated API explorer.
 8. `POST /v1/collation/replay-graph` — replay a multi-level collation DAG without silently promoting incomplete child nodes.
 9. `POST /v1/collation/replay-registry` — replay against expected children derived from an exact registry snapshot.
 
-Registry reads are available at `GET /v1/registry/{election_id}`, `/history`, and `/chain`. The fingerprint-only endpoint remains available at `POST /v1/evidence/fingerprint`.
+### Source governance workflow
 
-The source-ingestion core is currently library-level and intentionally performs no outbound HTTP requests. It captures externally supplied raw response bytes only after evaluating a `SourcePolicy` and emits a `ProvenanceReceipt`.
+1. `POST /v1/source-policies` — append a source-policy snapshot.
+2. `GET /v1/source-policies/{source_id}` — inspect the current source policy.
+3. `GET /v1/source-policies/{source_id}/history` — inspect prior policy versions.
+4. `GET /v1/source-policies/{source_id}/chain` — verify the source-policy hash chain.
+5. `POST /v1/sources/{source_id}/reservations` — request a persisted permission-to-fetch reservation bound to an exact policy snapshot.
+6. `GET /v1/sources/{source_id}/reservations` — inspect the request-reservation trail.
+7. `GET /v1/sources/{source_id}/receipts` — inspect captured-response receipts.
+8. `GET /v1/receipts/{receipt_id}` — retrieve one exact provenance receipt.
+
+The source-ingestion core still performs no outbound HTTP requests. A future live adapter must obtain a reservation before requesting a source, then preserve the raw response and bind its receipt to the governing policy snapshot.
 
 ## Trust model
 
@@ -74,6 +86,7 @@ Read:
 - [`docs/COLLATION_REPLAY.md`](docs/COLLATION_REPLAY.md)
 - [`docs/ELECTION_REGISTRY.md`](docs/ELECTION_REGISTRY.md)
 - [`docs/SOURCE_INGESTION.md`](docs/SOURCE_INGESTION.md)
+- [`docs/SOURCE_GOVERNANCE.md`](docs/SOURCE_GOVERNANCE.md)
 
 ## Web
 
@@ -106,15 +119,15 @@ Completed foundation:
 7. Versioned election registry with source provenance and hash-chained snapshots.
 8. Registry-bound replay tied to an exact snapshot hash.
 9. Governed raw source-capture framework with provenance receipts.
+10. Versioned source-policy ledger, receipt query APIs, and enforced request reservations with rate-limit/retry controls.
 
 Next:
 
-1. Persistent source-policy registry and receipt query API.
-2. Enforced request scheduling/rate-limit worker with retry/backoff semantics.
-3. Per-source adapters only after access-policy and terms review.
-4. Downloadable Parquet/CSV/JSON snapshots and signed manifests.
-5. Merkle checkpoints and independent mirror verification.
-6. Observer/PRVT integrations and operational security hardening.
+1. Source-specific adapter review and contract tests for one public source.
+2. Live HTTP transport only after that source's access policy, terms, authentication requirements, and rate limits are documented and approved.
+3. Downloadable Parquet/CSV/JSON snapshots and signed manifests.
+4. Merkle checkpoints and independent mirror verification.
+5. Observer/PRVT integrations and operational security hardening.
 
 ## License
 
