@@ -84,6 +84,13 @@ def _record_sort_key(record: ReleaseRecord) -> tuple[str, str]:
     return record.record_type, record.record_key
 
 
+def _record_dicts(records: list[ReleaseRecord]) -> list[dict[str, object]]:
+    return [
+        record.model_dump(mode="json")
+        for record in sorted(records, key=_record_sort_key)
+    ]
+
+
 def _leaf_hash(record: ReleaseRecord) -> bytes:
     return hashlib.sha256(canonical_json_bytes(record.model_dump(mode="json"))).digest()
 
@@ -116,8 +123,7 @@ def _file_entry(name: str, media_type: str, data: bytes) -> ReleaseFile:
 
 
 def _json_bytes(records: list[ReleaseRecord]) -> bytes:
-    payload = [record.model_dump(mode="json") for record in sorted(records, key=_record_sort_key)]
-    return canonical_json_bytes(payload) + b"\n"
+    return canonical_json_bytes(_record_dicts(records)) + b"\n"
 
 
 def _csv_bytes(records: list[ReleaseRecord]) -> bytes:
@@ -131,11 +137,18 @@ def _csv_bytes(records: list[ReleaseRecord]) -> bytes:
 
 def _parquet_bytes(records: list[ReleaseRecord]) -> bytes:
     ordered = sorted(records, key=_record_sort_key)
+    payload_json = [_canonical_payload(record) for record in ordered]
     table = pa.table(
         {
-            "record_type": pa.array([record.record_type for record in ordered], type=pa.string()),
-            "record_key": pa.array([record.record_key for record in ordered], type=pa.string()),
-            "payload_json": pa.array([_canonical_payload(record) for record in ordered], type=pa.string()),
+            "record_type": pa.array(
+                [record.record_type for record in ordered],
+                type=pa.string(),
+            ),
+            "record_key": pa.array(
+                [record.record_key for record in ordered],
+                type=pa.string(),
+            ),
+            "payload_json": pa.array(payload_json, type=pa.string()),
         }
     )
     metadata = {b"ballotproof_release_schema": RELEASE_SCHEMA_VERSION.encode("ascii")}
@@ -155,7 +168,7 @@ def _parquet_bytes(records: list[ReleaseRecord]) -> bytes:
 
 
 def _row_payload(row: sqlite3.Row) -> dict[str, object]:
-    return {key: row[key] for key in row.keys()}
+    return dict(zip(row.keys(), tuple(row), strict=True))
 
 
 def collect_release_records(root: str | Path, election_id: str) -> list[ReleaseRecord]:
@@ -196,7 +209,10 @@ def collect_release_records(root: str | Path, election_id: str) -> list[ReleaseR
             """,
             (election_id,),
         ).fetchall()
-        evidence_keys = [(str(row["evidence_id"]), int(row["version"])) for row in evidence_rows]
+        evidence_keys = [
+            (str(row["evidence_id"]), int(row["version"]))
+            for row in evidence_rows
+        ]
         for row in evidence_rows:
             payload = _row_payload(row)
             payload["source"] = json.loads(str(payload.pop("source_json")))
@@ -368,7 +384,10 @@ def verify_release(directory: str | Path) -> ReleaseVerification:
         public_key_bytes = base64.b64decode(signature.public_key_b64, validate=True)
         key_hash_valid = _sha256(public_key_bytes) == signature.signer_key_sha256
         public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
-        public_key.verify(base64.b64decode(signature.signature_b64, validate=True), manifest_raw)
+        public_key.verify(
+            base64.b64decode(signature.signature_b64, validate=True),
+            manifest_raw,
+        )
         signature_valid = manifest_hash_valid and key_hash_valid
 
         file_hashes_valid = True
@@ -385,13 +404,11 @@ def verify_release(directory: str | Path) -> ReleaseVerification:
         ]
         csv_records = _records_from_csv(file_bytes["records.csv"])
         parquet_records = _records_from_parquet(file_bytes["records.parquet"])
-        canonical = [record.model_dump(mode="json") for record in sorted(json_records, key=_record_sort_key)]
-        formats_equivalent = canonical == [
-            record.model_dump(mode="json") for record in sorted(csv_records, key=_record_sort_key)
-        ] and canonical == [
-            record.model_dump(mode="json")
-            for record in sorted(parquet_records, key=_record_sort_key)
-        ]
+        canonical = _record_dicts(json_records)
+        formats_equivalent = (
+            canonical == _record_dicts(csv_records)
+            and canonical == _record_dicts(parquet_records)
+        )
         merkle_valid = (
             len(json_records) == manifest.record_count
             and merkle_root(json_records) == manifest.merkle_root
