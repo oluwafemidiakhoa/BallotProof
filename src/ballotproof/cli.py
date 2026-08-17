@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ballotproof.auth import AuthStore
+from ballotproof.releases import build_release, load_ed25519_private_key, verify_release
 from ballotproof.source_approval import ApprovalEnforcingAcquisitionWorker
 from ballotproof.source_approval_auth import EnrolledSourceApprovalStore
 from ballotproof.source_worker import ProductionSourceWorker, TransportRegistry, WorkerStateStore
@@ -51,7 +52,63 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("BALLOTPROOF_DATA_DIR", ".ballotproof-data"),
         help="BallotProof data directory",
     )
+
+    release = subparsers.add_parser("release", help="Create or verify signed election releases")
+    release_subparsers = release.add_subparsers(dest="release_command", required=True)
+    create_release = release_subparsers.add_parser(
+        "create",
+        help="Create deterministic CSV, JSON, and Parquet exports plus a signed manifest",
+    )
+    create_release.add_argument("--election-id", required=True)
+    create_release.add_argument("--signing-key", required=True, help="Ed25519 private key PEM")
+    create_release.add_argument("--output-dir", required=True)
+    create_release.add_argument(
+        "--data-dir",
+        default=os.environ.get("BALLOTPROOF_DATA_DIR", ".ballotproof-data"),
+        help="BallotProof data directory",
+    )
+    verify = release_subparsers.add_parser(
+        "verify",
+        help="Verify release signature, file hashes, cross-format equivalence, and Merkle root",
+    )
+    verify.add_argument("release_dir")
     return parser
+
+
+def _run_auth(args, parser: argparse.ArgumentParser) -> int:
+    if args.auth_command != "bootstrap-admin":
+        parser.error("unknown auth command")
+    try:
+        issued = AuthStore(Path(args.data_dir)).bootstrap_admin(
+            args.actor_id,
+            display_name=args.display_name,
+        )
+    except (PermissionError, ValueError) as exc:
+        parser.error(str(exc))
+    print(json.dumps(issued.model_dump(mode="json"), sort_keys=True))
+    return 0
+
+
+def _run_release(args, parser: argparse.ArgumentParser) -> int:
+    if args.release_command == "create":
+        try:
+            key = load_ed25519_private_key(args.signing_key)
+            manifest = build_release(
+                args.data_dir,
+                args.election_id,
+                args.output_dir,
+                key,
+            )
+        except (KeyError, OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(manifest.model_dump(mode="json"), sort_keys=True))
+        return 0
+    if args.release_command == "verify":
+        verification = verify_release(args.release_dir)
+        print(json.dumps(verification.model_dump(mode="json"), sort_keys=True))
+        return 0 if verification.valid else 1
+    parser.error("unknown release command")
+    return 2
 
 
 def run_cli(argv: Sequence[str] | None = None) -> int:
@@ -59,18 +116,9 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "auth":
-        if args.auth_command != "bootstrap-admin":
-            parser.error("unknown auth command")
-        try:
-            issued = AuthStore(Path(args.data_dir)).bootstrap_admin(
-                args.actor_id,
-                display_name=args.display_name,
-            )
-        except (PermissionError, ValueError) as exc:
-            parser.error(str(exc))
-        print(json.dumps(issued.model_dump(mode="json"), sort_keys=True))
-        return 0
-
+        return _run_auth(args, parser)
+    if args.command == "release":
+        return _run_release(args, parser)
     if args.command != "worker":
         parser.error("unknown command")
 
