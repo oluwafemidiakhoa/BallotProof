@@ -32,13 +32,20 @@ class SourcePolicy(SourceModel):
     requests_per_minute: int = Field(default=6, ge=1, le=600)
     max_attempts: int = Field(default=3, ge=1, le=10)
     backoff_seconds: float = Field(default=1.0, ge=0, le=300)
+    retry_status_codes: list[int] = Field(
+        default_factory=lambda: [408, 425, 429, 500, 502, 503, 504]
+    )
     capture_raw_response: bool = True
     notes: str | None = Field(default=None, max_length=4000)
 
     @model_validator(mode="after")
-    def approved_sources_require_terms_review(self) -> SourcePolicy:
+    def validate_policy(self) -> SourcePolicy:
         if self.access_status is SourceAccessStatus.APPROVED and self.terms_reviewed_at is None:
             raise ValueError("approved sources require terms_reviewed_at")
+        if len(self.retry_status_codes) != len(set(self.retry_status_codes)):
+            raise ValueError("retry_status_codes must be unique")
+        if any(code < 100 or code > 599 for code in self.retry_status_codes):
+            raise ValueError("retry_status_codes must contain valid HTTP status codes")
         return self
 
 
@@ -52,6 +59,7 @@ class CaptureRequest(SourceModel):
     etag: str | None = Field(default=None, max_length=1000)
     last_modified: str | None = Field(default=None, max_length=1000)
     attempt: int = Field(default=1, ge=1, le=10)
+    request_key: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class ProvenanceReceipt(SourceModel):
@@ -66,6 +74,7 @@ class ProvenanceReceipt(SourceModel):
     etag: str | None = None
     last_modified: str | None = None
     attempt: int
+    request_key: str | None = None
     raw_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     raw_size_bytes: int = Field(ge=1)
     policy_status: SourceAccessStatus
@@ -85,7 +94,7 @@ class SourceCaptureStore:
         self.objects.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "source_receipts.sqlite3"
         with self._connect() as connection:
-            connection.execute(
+            connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS source_receipts (
                     receipt_id TEXT PRIMARY KEY,
@@ -93,7 +102,9 @@ class SourceCaptureStore:
                     raw_sha256 TEXT NOT NULL,
                     receipt_json TEXT NOT NULL,
                     stored_at TEXT NOT NULL
-                )
+                );
+                CREATE INDEX IF NOT EXISTS idx_source_receipts_source_time
+                ON source_receipts (source_id, stored_at, receipt_id);
                 """
             )
 
@@ -113,6 +124,7 @@ class SourceCaptureStore:
         *,
         policy: SourcePolicy,
         request: CaptureRequest,
+        policy_snapshot_hash: str | None = None,
         max_bytes: int = 50 * 1024 * 1024,
     ) -> CapturedResponse:
         if policy.source_id != request.source_id:
@@ -123,6 +135,11 @@ class SourceCaptureStore:
             raise ValueError("request attempt exceeds source policy max_attempts")
         if not policy.capture_raw_response:
             raise ValueError("source policy requires raw-response capture to remain enabled")
+        if policy_snapshot_hash is not None and (
+            len(policy_snapshot_hash) != 64
+            or any(character not in "0123456789abcdef" for character in policy_snapshot_hash)
+        ):
+            raise ValueError("policy_snapshot_hash must be a lowercase SHA-256 hex digest")
 
         temp_path = self.root / f".source-{uuid4().hex}"
         digest = hashlib.sha256()
@@ -159,10 +176,11 @@ class SourceCaptureStore:
                 etag=request.etag,
                 last_modified=request.last_modified,
                 attempt=request.attempt,
+                request_key=request.request_key,
                 raw_sha256=sha256,
                 raw_size_bytes=size,
                 policy_status=policy.access_status,
-                policy_snapshot_hash=self.policy_hash(policy),
+                policy_snapshot_hash=policy_snapshot_hash or self.policy_hash(policy),
                 stored_at=stored_at,
             )
             with self._connect() as connection:
@@ -184,6 +202,16 @@ class SourceCaptureStore:
         finally:
             if temp_path.exists():
                 temp_path.unlink()
+
+    def get_receipt(self, receipt_id: str) -> ProvenanceReceipt:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT receipt_json FROM source_receipts WHERE receipt_id = ?",
+                (receipt_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Unknown receipt_id: {receipt_id}")
+        return ProvenanceReceipt.model_validate_json(row["receipt_json"])
 
     def receipts(self, source_id: str) -> list[ProvenanceReceipt]:
         with self._connect() as connection:
