@@ -10,6 +10,8 @@ from typing import Annotated, Literal
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from ballotproof.attestations import verify_attestation
+from ballotproof.auth_api import router as auth_router
+from ballotproof.auth_middleware import install_auth_middleware
 from ballotproof.collation import CollationReplayReport, CollationReplayRequest, replay_collation
 from ballotproof.collation_graph import (
     CollationGraphReport,
@@ -60,13 +62,15 @@ SourceType = Literal[
 
 app = FastAPI(
     title="BallotProof API",
-    version="0.18.0",
+    version="0.19.0",
     description=(
-        "Evidence-preserving primitives for election verification, including versioned election "
-        "registries, source governance, automatic acquisition, immutable evidence, review, "
-        "attestations, and replay."
+        "Evidence-preserving primitives for election verification, including authenticated "
+        "governance, versioned election registries, source acquisition, immutable evidence, "
+        "review, attestations, and replay."
     ),
 )
+install_auth_middleware(app)
+app.include_router(auth_router)
 app.include_router(source_router)
 
 
