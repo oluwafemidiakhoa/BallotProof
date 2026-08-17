@@ -44,6 +44,7 @@ from ballotproof.registry_replay import (
     RegistryReplayRequest,
     replay_from_registry,
 )
+from ballotproof.source_api import router as source_router
 from ballotproof.storage import EvidenceStore
 from ballotproof.validation import validate_result_sheet
 
@@ -59,12 +60,13 @@ SourceType = Literal[
 
 app = FastAPI(
     title="BallotProof API",
-    version="0.7.0",
+    version="0.10.0",
     description=(
         "Evidence-preserving primitives for election verification, including versioned election "
-        "registries, immutable evidence, human review, attestations, and collation replay."
+        "registries, source governance, immutable evidence, review, attestations, and replay."
     ),
 )
+app.include_router(source_router)
 
 
 @lru_cache
