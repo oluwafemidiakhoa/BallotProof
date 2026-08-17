@@ -20,13 +20,14 @@ It is not an election authority, a winner-prediction system, or an AI judge. The
 - Source-neutral single-edge and multi-level collation replay with explicit expected units, completeness, missing/unexpected inputs, computed totals, and declared-result deltas.
 - Multi-level replay refuses to promote incomplete child collations into parent totals.
 - Append-only election registry snapshots for offices, candidates, expected units, topology, and source provenance.
-- Registry snapshot hash chains so candidate lists and expected polling-unit topology can change without erasing history.
+- Registry-bound replay that derives expected children from an exact registry version and snapshot hash.
+- Governed source-capture framework with policy status, retry/rate-limit metadata, immutable raw-response capture, and provenance receipts.
 - Next.js public evidence explorer using clearly labelled synthetic data.
 - Python tests and GitHub Actions CI.
 
 ## Non-goals
 
-BallotProof does **not** decide the official election result, infer fraud from an anomaly, treat OCR confidence as truth, silently repair source documents, hold observer private signing keys, or replace election observers and legal collation procedures.
+BallotProof does **not** decide the official election result, infer fraud from an anomaly, treat OCR confidence as truth, silently repair source documents, hold observer private signing keys, bypass external access controls, or replace election observers and legal collation procedures.
 
 ## API quick start
 
@@ -51,8 +52,11 @@ Open `http://127.0.0.1:8000/docs` for the generated API explorer.
 6. `GET /v1/elections/{election_id}/polling-units/{polling_unit_code}` — retrieve the complete public evidence bundle.
 7. `POST /v1/collation/replay` — reproduce one aggregation edge from an explicit expected unit set.
 8. `POST /v1/collation/replay-graph` — replay a multi-level collation DAG without silently promoting incomplete child nodes.
+9. `POST /v1/collation/replay-registry` — replay against expected children derived from an exact registry snapshot.
 
 Registry reads are available at `GET /v1/registry/{election_id}`, `/history`, and `/chain`. The fingerprint-only endpoint remains available at `POST /v1/evidence/fingerprint`.
+
+The source-ingestion core is currently library-level and intentionally performs no outbound HTTP requests. It captures externally supplied raw response bytes only after evaluating a `SourcePolicy` and emits a `ProvenanceReceipt`.
 
 ## Trust model
 
@@ -69,6 +73,7 @@ Read:
 - [`docs/EXTRACTION_ADAPTERS.md`](docs/EXTRACTION_ADAPTERS.md)
 - [`docs/COLLATION_REPLAY.md`](docs/COLLATION_REPLAY.md)
 - [`docs/ELECTION_REGISTRY.md`](docs/ELECTION_REGISTRY.md)
+- [`docs/SOURCE_INGESTION.md`](docs/SOURCE_INGESTION.md)
 
 ## Web
 
@@ -99,14 +104,17 @@ Completed foundation:
 5. Provider-neutral extraction adapter manifests.
 6. Single-edge and multi-level collation replay with conservative completeness propagation.
 7. Versioned election registry with source provenance and hash-chained snapshots.
+8. Registry-bound replay tied to an exact snapshot hash.
+9. Governed raw source-capture framework with provenance receipts.
 
 Next:
 
-1. Real source-adapter framework with rate limiting, provenance receipts, and source-policy review.
-2. Registry-aware replay helpers that derive expected units from a chosen snapshot rather than caller-supplied lists.
-3. Downloadable Parquet/CSV/JSON snapshots and signed manifests.
-4. Merkle checkpoints and independent mirror verification.
-5. Observer/PRVT integrations and operational security hardening.
+1. Persistent source-policy registry and receipt query API.
+2. Enforced request scheduling/rate-limit worker with retry/backoff semantics.
+3. Per-source adapters only after access-policy and terms review.
+4. Downloadable Parquet/CSV/JSON snapshots and signed manifests.
+5. Merkle checkpoints and independent mirror verification.
+6. Observer/PRVT integrations and operational security hardening.
 
 ## License
 
