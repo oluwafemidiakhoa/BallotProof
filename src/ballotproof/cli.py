@@ -10,9 +10,9 @@ from pathlib import Path
 
 from ballotproof.auth import AuthStore
 from ballotproof.release_governance import ReleaseGovernanceStore
+from ballotproof.release_v023 import build_atomic_release, verify_semantic_release
 from ballotproof.releases import (
     ReleaseProofBundle,
-    build_release,
     create_release_inclusion_proof,
     load_ed25519_private_key,
     publish_release,
@@ -72,7 +72,10 @@ def build_parser() -> argparse.ArgumentParser:
     release_subparsers = release.add_subparsers(dest="release_command", required=True)
     create_release = release_subparsers.add_parser(
         "create",
-        help="Create deterministic CSV, JSON, and Parquet exports plus a signed manifest",
+        help=(
+            "Create an application-coordinated cross-database snapshot, deterministic exports, "
+            "signed manifest, and signed semantic dataset summary"
+        ),
     )
     create_release.add_argument("--election-id", required=True)
     create_release.add_argument("--signing-key", required=True, help="Ed25519 private key PEM")
@@ -88,6 +91,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--trusted-signer-sha256",
         action="append",
         help="Require the embedded release signer to match this SHA-256 fingerprint; repeatable",
+    )
+
+    verify_semantic = release_subparsers.add_parser(
+        "verify-semantic",
+        help="Verify the signed normalized semantic dataset root bound to a base release",
+    )
+    verify_semantic.add_argument("release_dir")
+    verify_semantic.add_argument(
+        "--trusted-signer-sha256",
+        action="append",
+        help="Require the base release signer to match this SHA-256 fingerprint; repeatable",
     )
 
     verify_manifest = release_subparsers.add_parser(
@@ -181,7 +195,7 @@ def _run_release(args, parser: argparse.ArgumentParser) -> int:
     if args.release_command == "create":
         try:
             key = load_ed25519_private_key(args.signing_key)
-            manifest = build_release(
+            summary = build_atomic_release(
                 args.data_dir,
                 args.election_id,
                 args.output_dir,
@@ -189,10 +203,14 @@ def _run_release(args, parser: argparse.ArgumentParser) -> int:
             )
         except (KeyError, OSError, ValueError) as exc:
             parser.error(str(exc))
-        print(json.dumps(manifest.model_dump(mode="json"), sort_keys=True))
+        print(json.dumps(summary.model_dump(mode="json"), sort_keys=True))
         return 0
     if args.release_command == "verify":
         verification = verify_release(args.release_dir, trusted_signers)
+        print(json.dumps(verification.model_dump(mode="json"), sort_keys=True))
+        return 0 if verification.valid else 1
+    if args.release_command == "verify-semantic":
+        verification = verify_semantic_release(args.release_dir, trusted_signers)
         print(json.dumps(verification.model_dump(mode="json"), sort_keys=True))
         return 0 if verification.valid else 1
     if args.release_command == "verify-manifest":
