@@ -5,8 +5,8 @@ import json
 import os
 import signal
 import threading
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from ballotproof.source_worker import ProductionSourceWorker, TransportRegistry, WorkerStateStore
 
