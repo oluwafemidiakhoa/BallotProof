@@ -422,7 +422,14 @@ def verify_release(directory: str | Path) -> ReleaseVerification:
             formats_equivalent=formats_equivalent,
             merkle_valid=merkle_valid,
         )
-    except (OSError, ValueError, KeyError, InvalidSignature, json.JSONDecodeError) as exc:
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        KeyError,
+        InvalidSignature,
+        json.JSONDecodeError,
+    ) as exc:
         return ReleaseVerification(
             valid=False,
             signature_valid=False,
