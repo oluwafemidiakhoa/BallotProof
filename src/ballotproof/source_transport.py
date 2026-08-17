@@ -162,9 +162,8 @@ class SourceTransportExecutor:
 
     @staticmethod
     def _ensure_column(connection: sqlite3.Connection, column_name: str, sql_type: str) -> None:
-        columns = {
-            row["name"] for row in connection.execute("PRAGMA table_info(source_transport_executions)")
-        }
+        rows = connection.execute("PRAGMA table_info(source_transport_executions)")
+        columns = {row["name"] for row in rows}
         if column_name not in columns:
             connection.execute(
                 f"ALTER TABLE source_transport_executions ADD COLUMN {column_name} {sql_type}"
@@ -296,7 +295,7 @@ class SourceTransportExecutor:
         cls = type(transport)
         identity = f"{cls.__module__}.{cls.__qualname__}"
         config_hash = hashlib.sha256(
-            f"compatibility:{identity}:unversioned".encode("utf-8")
+            f"compatibility:{identity}:unversioned".encode()
         ).hexdigest()
         return TransportProvenance(
             transport_id=identity,
