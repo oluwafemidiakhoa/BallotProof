@@ -10,7 +10,6 @@ from fastapi.responses import JSONResponse, Response
 from ballotproof.auth import Permission
 from ballotproof.auth_api import get_auth_store
 
-
 _ROUTE_PERMISSIONS: tuple[tuple[str, re.Pattern[str], Permission], ...] = (
     ("POST", re.compile(r"^/v1/registry/snapshots$"), Permission.MANAGE_REGISTRY),
     ("POST", re.compile(r"^/v1/evidence/ingest$"), Permission.WRITE_EVIDENCE),
@@ -19,7 +18,11 @@ _ROUTE_PERMISSIONS: tuple[tuple[str, re.Pattern[str], Permission], ...] = (
     ("POST", re.compile(r"^/v1/attestations$"), Permission.WRITE_EVIDENCE),
     ("POST", re.compile(r"^/v1/source-policies$"), Permission.MANAGE_POLICIES),
     ("POST", re.compile(r"^/v1/source-approvals$"), Permission.MANAGE_APPROVALS),
-    ("POST", re.compile(r"^/v1/sources/[^/]+/reservations$"), Permission.MANAGE_AUTOMATION),
+    (
+        "POST",
+        re.compile(r"^/v1/sources/[^/]+/reservations$"),
+        Permission.MANAGE_AUTOMATION,
+    ),
     ("POST", re.compile(r"^/v1/source-automation/plans$"), Permission.MANAGE_AUTOMATION),
     (
         "POST",
