@@ -6,8 +6,8 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from ballotproof.source_ingestion import (
-    CaptureRequest,
     CapturedResponse,
+    CaptureRequest,
     SourceAccessStatus,
     SourceCaptureStore,
     SourcePolicy,
