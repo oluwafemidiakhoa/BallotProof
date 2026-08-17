@@ -23,8 +23,10 @@ It is not an election authority, a winner-prediction system, or an AI judge. The
 - Governed raw source capture with immutable provenance receipts.
 - Append-only, hash-chained source-policy snapshots.
 - Persisted request reservations enforcing source approval, policy snapshot binding, retry sequencing, exponential backoff, duplicate-attempt protection, and sliding-window request limits.
-- Source policy, receipt, and reservation query APIs exposed on the main FastAPI app.
+- Automatic recurring acquisition plans with persistent run history, pause/resume controls, missed-interval suppression, and a durable worker loop.
+- Source policy, receipt, reservation, and automation query APIs exposed on the main FastAPI app.
 - One-shot injected transport execution ledger: no default network client, no implicit retries, and success only after immutable response capture.
+- Pre-live outbound request hardening: exact policy host allowlists, HTTPS/GET-only acquisition, no credential-bearing URLs or fragments, standard HTTPS port enforcement, unsafe IP-literal rejection, execution-time current-policy rechecks, transport timeout/size limits, and direct reservation-to-receipt binding.
 - Fixture-only INEC IReV adapter contract with live transport disabled pending source-specific terms/access review.
 - Next.js public evidence explorer using clearly labelled synthetic data.
 - Python tests and GitHub Actions CI.
@@ -64,14 +66,19 @@ Open `http://127.0.0.1:8000/docs` for the generated API explorer.
 2. `GET /v1/source-policies/{source_id}` — inspect the current source policy.
 3. `GET /v1/source-policies/{source_id}/history` — inspect prior policy versions.
 4. `GET /v1/source-policies/{source_id}/chain` — verify the source-policy hash chain.
-5. `POST /v1/sources/{source_id}/reservations` — request persisted permission-to-fetch bound to an exact policy snapshot.
+5. `POST /v1/sources/{source_id}/reservations` — request persisted permission-to-fetch bound to the current exact policy snapshot.
 6. `GET /v1/sources/{source_id}/reservations` — inspect the request-reservation trail.
 7. `GET /v1/sources/{source_id}/receipts` — inspect captured-response receipts.
 8. `GET /v1/receipts/{receipt_id}` — retrieve one exact provenance receipt.
+9. `POST /v1/source-automation/plans` — create a recurring plan bound to the current approved policy snapshot.
+10. `GET /v1/source-automation/plans` — list recurring acquisition plans.
+11. `POST /v1/source-automation/plans/{plan_id}/pause` — pause a plan.
+12. `POST /v1/source-automation/plans/{plan_id}/resume` — resume only when the plan still matches the current approved policy.
+13. `GET /v1/source-automation/plans/{plan_id}/runs` — inspect the automation run ledger.
 
-The core still ships no outbound HTTP implementation. A source transport must be explicitly injected into the execution harness. It can run only with an approved policy snapshot and a persisted reservation, and a reservation is consumed exactly once. Successful execution is not recorded until the raw response has produced an immutable provenance receipt.
+The core still ships no outbound HTTP implementation. A source transport must be explicitly injected into the execution harness. The scheduler and executor both enforce request policy, and the executor re-fetches the latest source-policy snapshot immediately before transport. A reservation created under an older approval cannot execute after the policy changes. Every successful governed transport receipt is directly linked to its reservation ID and exact policy snapshot hash.
 
-See [`docs/SOURCE_TRANSPORT.md`](docs/SOURCE_TRANSPORT.md).
+See [`docs/SOURCE_TRANSPORT.md`](docs/SOURCE_TRANSPORT.md), [`docs/AUTOMATION.md`](docs/AUTOMATION.md), and [`docs/SOURCE_SECURITY.md`](docs/SOURCE_SECURITY.md).
 
 ## INEC IReV review
 
@@ -97,6 +104,8 @@ Read:
 - [`docs/SOURCE_INGESTION.md`](docs/SOURCE_INGESTION.md)
 - [`docs/SOURCE_GOVERNANCE.md`](docs/SOURCE_GOVERNANCE.md)
 - [`docs/SOURCE_TRANSPORT.md`](docs/SOURCE_TRANSPORT.md)
+- [`docs/AUTOMATION.md`](docs/AUTOMATION.md)
+- [`docs/SOURCE_SECURITY.md`](docs/SOURCE_SECURITY.md)
 - [`docs/INEC_IREV_REVIEW.md`](docs/INEC_IREV_REVIEW.md)
 
 ## Web
@@ -133,15 +142,17 @@ Completed foundation:
 10. Main API exposure for source-governance routes.
 11. Fixture-only INEC IReV source contract with a quarantined `review_required` policy.
 12. One-shot, dependency-injected source transport execution with immutable response capture.
+13. Automatic recurring acquisition plans, persistent run history, and worker execution.
+14. Pre-live network policy enforcement with execution-time stale-policy protection and direct reservation-to-receipt provenance.
 
 Next:
 
-1. Resolve IReV-specific Terms of Use, authentication, supported automated-access contract, and rate-limit expectations before any live IReV transport is enabled.
-2. Approve a source only through a new versioned policy snapshot with documented terms review.
-3. Implement the first real network transport only for a source with an explicit machine-access contract, reusing the reservation -> one-shot execution -> immutable receipt lifecycle.
+1. Add a production worker entrypoint/process configuration with explicit transport registration and operational health reporting.
+2. Implement the first real network transport only for a source with an explicit machine-access contract. The transport must validate resolved IP addresses, keep redirects disabled, honor policy timeouts, and enforce response-size limits while streaming.
+3. Resolve IReV-specific Terms of Use, authentication, supported automated-access contract, and rate-limit expectations before any live IReV transport is enabled.
 4. Add downloadable Parquet/CSV/JSON snapshots and signed manifests.
 5. Add Merkle checkpoints and independent mirror verification.
-6. Add observer/PRVT integrations and operational security hardening.
+6. Add observer/PRVT integrations, authentication/RBAC, production storage, and operational security hardening.
 
 ## License
 
