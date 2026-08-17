@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Literal
 
@@ -95,3 +96,50 @@ class EvidenceFingerprint(StrictModel):
     size_bytes: NonNegativeInt
     media_type: str | None = None
     filename: str | None = None
+
+
+class EvidenceVersion(StrictModel):
+    evidence_id: str
+    election_id: str
+    polling_unit_code: str
+    document_type: str
+    source: EvidenceSource
+    version: Annotated[int, Field(ge=1)]
+    artifact_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    artifact_size_bytes: NonNegativeInt
+    media_type: str | None = None
+    filename: str | None = None
+    observed_at: datetime
+    stored_at: datetime
+    previous_record_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    record_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ChainVerification(StrictModel):
+    evidence_id: str
+    valid: bool
+    versions_checked: NonNegativeInt
+    failure_version: int | None = None
+
+
+class AttestationStatement(StrEnum):
+    REVIEWED_SOURCE = "reviewed_source"
+    MATCHES_SOURCE = "matches_source"
+    DISPUTES_EXTRACTION = "disputes_extraction"
+
+
+class AttestationPayload(StrictModel):
+    evidence_id: str
+    evidence_version: Annotated[int, Field(ge=1)]
+    record_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    actor_id: str = Field(min_length=1, max_length=256)
+    statement: AttestationStatement
+    issued_at: datetime
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class SignedAttestation(StrictModel):
+    payload: AttestationPayload
+    algorithm: Literal["Ed25519"] = "Ed25519"
+    public_key_b64: str
+    signature_b64: str
