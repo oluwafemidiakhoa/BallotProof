@@ -2,7 +2,7 @@
 
 **Independent, reproducible evidence for election results.**
 
-BallotProof is an open-source foundation for preserving election evidence, fingerprinting source artifacts, validating result-sheet arithmetic, reconciling numbers across sources, and retaining tamper-evident history.
+BallotProof is an open-source foundation for preserving election evidence, fingerprinting source artifacts, validating result-sheet arithmetic, replaying collation, reconciling numbers across sources, and retaining tamper-evident history.
 
 It is not an election authority, a winner-prediction system, or an AI judge. The design goal is stricter: **every structured claim should be traceable to evidence, every automated check should be reproducible, and every discrepancy should remain visible until explained.**
 
@@ -13,9 +13,11 @@ It is not an election authority, a winner-prediction system, or an AI judge. The
 - Ed25519-signed attestations bound to an exact evidence record.
 - Evidence ingestion API with explicit source provenance.
 - Append-only OCR/vision extraction records with field-level confidence and model provenance.
+- Provider-neutral extraction adapter contract with reproducible configuration manifests.
 - Human review records that accept, correct, or reject extracted fields without mutating model output.
 - Polling-unit evidence bundles containing versions, chain verification, attestations, extraction, and review history.
 - Deterministic arithmetic/accreditation checks and source-to-source reconciliation.
+- Source-neutral collation replay with explicit expected units, coverage, missing/unexpected units, computed totals, and declared-result deltas.
 - Next.js public evidence explorer using clearly labelled synthetic data.
 - Python tests and GitHub Actions CI.
 
@@ -43,6 +45,7 @@ Open `http://127.0.0.1:8000/docs` for the generated API explorer.
 3. `POST /v1/extractions/{extraction_id}/reviews` — append human review without overwriting machine output.
 4. `POST /v1/attestations` — verify and retain an Ed25519-signed actor statement.
 5. `GET /v1/elections/{election_id}/polling-units/{polling_unit_code}` — retrieve the complete public evidence bundle.
+6. `POST /v1/collation/replay` — reproduce an aggregation edge from an explicit expected unit set and compare it with supplied declared totals.
 
 The original fingerprint-only endpoint remains available at `POST /v1/evidence/fingerprint` for clients that want hashing without persistence.
 
@@ -58,6 +61,8 @@ Read:
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md)
 - [`docs/EXTRACTION_REVIEW.md`](docs/EXTRACTION_REVIEW.md)
+- [`docs/EXTRACTION_ADAPTERS.md`](docs/EXTRACTION_ADAPTERS.md)
+- [`docs/COLLATION_REPLAY.md`](docs/COLLATION_REPLAY.md)
 
 ## Web
 
@@ -85,15 +90,16 @@ Completed foundation:
 2. Cryptographic provenance chaining and signed attestations.
 3. Evidence ingestion, extraction/review records, and polling-unit evidence retrieval.
 4. Public evidence explorer contract.
+5. Provider-neutral extraction adapter manifests.
+6. Single-edge collation replay with completeness and discrepancy reporting.
 
 Next:
 
-1. Pluggable OCR/vision adapters with reproducible model configuration manifests.
+1. Multi-level polling-unit → ward → LGA → state/constituency replay graph.
 2. Real source adapters with rate limiting, provenance receipts, and source-policy review.
-3. Polling-unit → ward → LGA → state collation replay.
-4. Downloadable Parquet/CSV/JSON snapshots and signed manifests.
-5. Merkle checkpoints and independent mirror verification.
-6. Observer/PRVT integrations and operational security hardening.
+3. Downloadable Parquet/CSV/JSON snapshots and signed manifests.
+4. Merkle checkpoints and independent mirror verification.
+5. Observer/PRVT integrations and operational security hardening.
 
 ## License
 
