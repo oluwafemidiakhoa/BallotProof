@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from typing import Annotated
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 
@@ -43,7 +44,9 @@ def reconcile(request: ReconciliationRequest) -> ReconciliationReport:
 
 
 @app.post("/v1/evidence/fingerprint", response_model=EvidenceFingerprint, tags=["evidence"])
-async def fingerprint_evidence(file: UploadFile = File(...)) -> EvidenceFingerprint:
+async def fingerprint_evidence(
+    file: Annotated[UploadFile, File()],
+) -> EvidenceFingerprint:
     digest = hashlib.sha256()
     size = 0
 
