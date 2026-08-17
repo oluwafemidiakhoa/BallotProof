@@ -2,24 +2,22 @@
 
 **Independent, reproducible evidence for election results.**
 
-BallotProof is an open-source foundation for preserving election evidence, fingerprinting source artifacts, validating result-sheet arithmetic, reconciling numbers across evidence sources, and retaining tamper-evident history.
+BallotProof is an open-source foundation for preserving election evidence, fingerprinting source artifacts, validating result-sheet arithmetic, reconciling numbers across sources, and retaining tamper-evident history.
 
-It is not an election authority, a winner-prediction system, or an AI judge. The design goal is simpler and stricter: **every structured claim should be traceable to evidence, every automated check should be reproducible, and every discrepancy should remain visible until explained.**
+It is not an election authority, a winner-prediction system, or an AI judge. The design goal is stricter: **every structured claim should be traceable to evidence, every automated check should be reproducible, and every discrepancy should remain visible until explained.**
 
 ## Current capabilities
 
-- SHA-256 fingerprinting for evidence files without modifying them.
-- Content-addressed immutable artifact storage: identical files resolve to the same object.
-- Append-only SQLite metadata with versioned evidence records.
-- SHA-256 hash chaining between evidence versions for tamper detection.
-- Ed25519-signed human/organizational attestations bound to an exact evidence version.
-- Strict data models for polling-unit result sheets.
-- Deterministic arithmetic and accreditation consistency checks.
-- Source-to-source candidate-total reconciliation.
-- JSON Schemas for evidence and discrepancy records.
-- FastAPI service with generated OpenAPI documentation.
-- Minimal public web interface explaining the trust model.
-- Tests and CI for the verification primitives.
+- Content-addressed SHA-256 artifact storage.
+- Append-only SQLite evidence version history with hash chaining.
+- Ed25519-signed attestations bound to an exact evidence record.
+- Evidence ingestion API with explicit source provenance.
+- Append-only OCR/vision extraction records with field-level confidence and model provenance.
+- Human review records that accept, correct, or reject extracted fields without mutating model output.
+- Polling-unit evidence bundles containing versions, chain verification, attestations, extraction, and review history.
+- Deterministic arithmetic/accreditation checks and source-to-source reconciliation.
+- Next.js public evidence explorer using clearly labelled synthetic data.
+- Python tests and GitHub Actions CI.
 
 ## Non-goals
 
@@ -34,64 +32,34 @@ pip install -e '.[dev]'
 uvicorn apps.api.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/docs` for the API explorer.
+Set `BALLOTPROOF_DATA_DIR` to choose where immutable objects and the SQLite ledger are stored. The default is `.ballotproof-data`.
 
-Example deterministic validation request:
+Open `http://127.0.0.1:8000/docs` for the generated API explorer.
 
-```bash
-curl -X POST http://127.0.0.1:8000/v1/validate/result-sheet \
-  -H 'content-type: application/json' \
-  -d '{
-    "polling_unit_code": "DEMO-PU-001",
-    "registered_voters": 500,
-    "accredited_voters": 300,
-    "valid_votes": 285,
-    "rejected_votes": 15,
-    "votes_cast": 300,
-    "candidate_votes": [
-      {"candidate_id": "A", "votes": 160},
-      {"candidate_id": "B", "votes": 125}
-    ]
-  }'
-```
+### Public evidence workflow
 
-## Evidence store
+1. `POST /v1/evidence/ingest` — retain the source artifact and create an evidence version.
+2. `POST /v1/extractions` — append model output tied to the exact evidence record hash.
+3. `POST /v1/extractions/{extraction_id}/reviews` — append human review without overwriting machine output.
+4. `POST /v1/attestations` — verify and retain an Ed25519-signed actor statement.
+5. `GET /v1/elections/{election_id}/polling-units/{polling_unit_code}` — retrieve the complete public evidence bundle.
 
-The core store separates immutable bytes from append-only observations:
+The original fingerprint-only endpoint remains available at `POST /v1/evidence/fingerprint` for clients that want hashing without persistence.
 
-```python
-from datetime import UTC, datetime
-from io import BytesIO
+## Trust model
 
-from ballotproof.models import EvidenceSource
-from ballotproof.storage import EvidenceStore
+The core rule is:
 
-store = EvidenceStore("./data")
-artifact = store.put_artifact(BytesIO(b"raw result-sheet bytes"))
-version = store.append_version(
-    artifact=artifact,
-    election_id="NG-DEMO-2026",
-    polling_unit_code="PU-001",
-    document_type="EC8A",
-    source=EvidenceSource(
-        provider="observer-network",
-        source_type="observer_capture",
-    ),
-    observed_at=datetime.now(UTC),
-)
+> **AI may extract and flag. Deterministic rules validate. Humans attest. Original evidence remains preserved.**
 
-assert store.verify_chain(version.evidence_id).valid
-```
+Read:
 
-Artifact paths are derived from SHA-256. Metadata versions are never updated in place by the public store API; a changed observation creates another version chained to the previous record hash.
+- [`docs/TRUST_MODEL.md`](docs/TRUST_MODEL.md)
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md)
+- [`docs/EXTRACTION_REVIEW.md`](docs/EXTRACTION_REVIEW.md)
 
-## Signed attestations
-
-BallotProof uses Ed25519 signatures. A signed attestation binds an actor statement to a specific `evidence_id`, version, and record hash. The signer retains their private key; BallotProof stores the public key, payload, and signature and can verify them independently.
-
-This is evidence of **who attested to what exact record**, not proof that the underlying claim is true.
-
-## Web quick start
+## Web
 
 ```bash
 cd apps/web
@@ -99,7 +67,7 @@ npm install
 npm run dev
 ```
 
-The web app is built with Next.js App Router and contains only synthetic demonstration data.
+The demo evidence explorer is available at `/evidence/DEMO-PU-001`. Its election data is synthetic by design.
 
 ## Tests
 
@@ -109,29 +77,23 @@ ruff check .
 pytest
 ```
 
-## Trust model
-
-Read [`docs/TRUST_MODEL.md`](docs/TRUST_MODEL.md) before adding extraction models, observer attestations, or public election data. The core rule is:
-
-> AI may extract and flag. Deterministic rules validate. Humans attest. Original evidence remains preserved.
-
 ## Roadmap
 
 Completed foundation:
 
-1. Content-addressed artifact storage and version history.
-2. Cryptographic provenance chaining.
-3. Ed25519 signed attestations.
+1. Content-addressed artifact storage and evidence version history.
+2. Cryptographic provenance chaining and signed attestations.
+3. Evidence ingestion, extraction/review records, and polling-unit evidence retrieval.
+4. Public evidence explorer contract.
 
 Next:
 
-1. Evidence ingestion adapters with explicit source provenance.
-2. OCR/vision extraction with field-level uncertainty and model provenance.
-3. Human review workflow and public polling-unit evidence explorer.
-4. Polling-unit to ward/LGA/state collation replay.
-5. Downloadable Parquet/CSV/JSON election snapshots.
-6. Signed manifests and Merkle checkpoints.
-7. Independent observer and PRVT/PVT integrations.
+1. Pluggable OCR/vision adapters with reproducible model configuration manifests.
+2. Real source adapters with rate limiting, provenance receipts, and source-policy review.
+3. Polling-unit → ward → LGA → state collation replay.
+4. Downloadable Parquet/CSV/JSON snapshots and signed manifests.
+5. Merkle checkpoints and independent mirror verification.
+6. Observer/PRVT integrations and operational security hardening.
 
 ## License
 

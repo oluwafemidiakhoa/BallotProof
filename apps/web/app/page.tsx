@@ -14,7 +14,7 @@ export default function Home() {
         </a>
         <div className="navLinks">
           <a href="#method">Method</a>
-          <a href="#evidence">Evidence</a>
+          <a href="/evidence/DEMO-PU-001">Explorer</a>
           <a href="https://github.com/oluwafemidiakhoa/BallotProof">GitHub</a>
         </div>
       </nav>
@@ -23,42 +23,43 @@ export default function Home() {
         <div className="eyebrow">Open election evidence infrastructure</div>
         <h1>Do not trust the dashboard. <span>Verify the evidence.</span></h1>
         <p className="lede">
-          BallotProof fingerprints source artifacts, validates result-sheet arithmetic, and
-          exposes discrepancies without asking AI to decide what is true.
+          BallotProof preserves source artifacts, exposes machine uncertainty, validates
+          result-sheet arithmetic, and keeps human corrections and source disagreements visible.
         </p>
         <div className="actions">
-          <a className="button primary" href="#evidence">See the evidence model</a>
+          <a className="button primary" href="/evidence/DEMO-PU-001">Open the evidence explorer</a>
           <a className="button secondary" href="https://github.com/oluwafemidiakhoa/BallotProof">Inspect the source</a>
         </div>
-        <p className="disclaimer">Independent infrastructure. Not an election authority. Demo data below is synthetic.</p>
+        <p className="disclaimer">Independent infrastructure. Not an election authority. Demo data is synthetic.</p>
       </section>
 
       <section className="signal shell" aria-label="Core principles">
-        <article><strong>SHA-256</strong><span>Original artifact fingerprint</span></article>
-        <article><strong>Deterministic</strong><span>Reproducible validation rules</span></article>
-        <article><strong>Versioned</strong><span>No silent evidence replacement</span></article>
+        <article><strong>Immutable</strong><span>Content-addressed source artifacts</span></article>
+        <article><strong>Append-only</strong><span>Machine and human claims remain separate</span></article>
+        <article><strong>Signed</strong><span>Ed25519 actor attestations</span></article>
         <article><strong>Source-neutral</strong><span>Discrepancies stay visible</span></article>
       </section>
 
       <section className="demo shell" id="evidence">
         <div className="sectionCopy">
           <div className="eyebrow">Synthetic demonstration</div>
-          <h2>One claim. Every check exposed.</h2>
+          <h2>One claim. Every layer exposed.</h2>
           <p>
-            A result should never be reduced to a green badge. BallotProof keeps the document
-            fingerprint, structured claims, arithmetic checks, and source disagreements separate.
+            A result should never be reduced to a green badge. BallotProof keeps source bytes,
+            machine extraction, human review, arithmetic checks, signatures, and disagreements separate.
           </p>
+          <div className="actions"><a className="button secondary" href="/evidence/DEMO-PU-001">Inspect DEMO-PU-001</a></div>
         </div>
 
         <div className="evidenceCard">
           <div className="cardHeader">
             <div><span className="kicker">Polling unit</span><strong>DEMO-PU-001</strong></div>
-            <span className="status">Evidence parsed</span>
+            <span className="status">Chain verified</span>
           </div>
           <dl className="fingerprint">
             <div><dt>Artifact</dt><dd>EC8A</dd></div>
             <div><dt>SHA-256</dt><dd>7b51...9af2</dd></div>
-            <div><dt>Version</dt><dd>1</dd></div>
+            <div><dt>Version</dt><dd>2</dd></div>
           </dl>
           <div className="checkList">
             {checks.map(([label, value, status]) => (
@@ -72,8 +73,8 @@ export default function Home() {
           <div className="alert">
             <span className="alertIcon" aria-hidden="true">!</span>
             <div>
-              <strong>Source discrepancy remains open</strong>
-              <p>Comparison evidence reports 10 fewer votes for Candidate A. BallotProof does not silently choose a source.</p>
+              <strong>Machine extraction has a reviewed correction</strong>
+              <p>The original model value is preserved beside the reviewer correction; neither silently overwrites the other.</p>
             </div>
           </div>
         </div>
@@ -85,10 +86,10 @@ export default function Home() {
           <h2>AI proposes. Rules validate. Humans attest.</h2>
         </div>
         <div className="steps">
-          <article><span>01</span><h3>Preserve</h3><p>Fingerprint the original evidence before extraction or transformation.</p></article>
-          <article><span>02</span><h3>Extract</h3><p>Turn result sheets into structured claims while retaining field-level uncertainty.</p></article>
-          <article><span>03</span><h3>Validate</h3><p>Run public, deterministic rules over arithmetic and accreditation fields.</p></article>
-          <article><span>04</span><h3>Reconcile</h3><p>Compare polling-unit evidence with later collation records and expose every delta.</p></article>
+          <article><span>01</span><h3>Preserve</h3><p>Fingerprint and retain the original evidence before extraction or transformation.</p></article>
+          <article><span>02</span><h3>Extract</h3><p>Store field-level model claims with confidence and model provenance.</p></article>
+          <article><span>03</span><h3>Review</h3><p>Record human acceptance, correction, or rejection without destroying the machine claim.</p></article>
+          <article><span>04</span><h3>Reconcile</h3><p>Compare evidence sources and expose every unresolved delta.</p></article>
         </div>
       </section>
 
