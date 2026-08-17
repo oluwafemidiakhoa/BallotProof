@@ -196,7 +196,9 @@ class TransportRegistry:
         if source in self._transports:
             raise ValueError(f"transport already registered for source: {source}")
         if not callable(getattr(transport, "send", None)):
-            raise TypeError("registered source transport must provide a callable send(request) method")
+            raise TypeError(
+                "registered source transport must provide a callable send(request) method"
+            )
         self._transports[source] = transport
 
     @property
@@ -229,14 +231,16 @@ def load_transport_spec(spec: str) -> tuple[str, SourceTransport]:
 
     module = importlib.import_module(module_name)
     target = getattr(module, attribute_name)
-    if isinstance(target, type):
-        transport = target()
-    elif callable(target) and not callable(getattr(target, "send", None)):
+    if isinstance(target, type) or (
+        callable(target) and not callable(getattr(target, "send", None))
+    ):
         transport = target()
     else:
         transport = target
     if not callable(getattr(transport, "send", None)):
-        raise TypeError("transport target must be a transport object, class, or zero-argument factory")
+        raise TypeError(
+            "transport target must be a transport object, class, or zero-argument factory"
+        )
     return source_id, transport
 
 
