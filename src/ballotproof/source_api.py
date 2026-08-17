@@ -24,6 +24,7 @@ from ballotproof.source_scheduler import (
     SourceReservationRequest,
     SourceSchedulerStore,
 )
+from ballotproof.source_worker import WorkerHealthReport, WorkerStateStore
 
 router = APIRouter(prefix="/v1")
 
@@ -50,6 +51,11 @@ def get_source_scheduler_store() -> SourceSchedulerStore:
 @lru_cache
 def get_source_automation_store() -> SourceAutomationStore:
     return SourceAutomationStore(_data_root())
+
+
+@lru_cache
+def get_source_worker_store() -> WorkerStateStore:
+    return WorkerStateStore(_data_root())
 
 
 @router.post(
@@ -234,3 +240,15 @@ def resume_source_automation_plan(plan_id: str) -> SourceAutomationPlan:
             detail="automation plan is not bound to the current approved policy snapshot",
         )
     return get_source_automation_store().set_enabled(plan_id, True)
+
+
+@router.get(
+    "/source-worker/status",
+    response_model=WorkerHealthReport,
+    tags=["source-automation"],
+)
+def source_worker_status() -> WorkerHealthReport:
+    try:
+        return get_source_worker_store().health()
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

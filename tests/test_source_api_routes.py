@@ -15,3 +15,4 @@ def test_source_governance_routes_are_registered():
     assert "/v1/source-automation/plans/{plan_id}/runs" in paths
     assert "/v1/source-automation/plans/{plan_id}/pause" in paths
     assert "/v1/source-automation/plans/{plan_id}/resume" in paths
+    assert "/v1/source-worker/status" in paths
