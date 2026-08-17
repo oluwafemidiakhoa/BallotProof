@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,6 +57,7 @@ class SourcePolicyStore:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 5000")
         return connection
 
     @staticmethod
@@ -151,33 +153,38 @@ class SourcePolicyStore:
         return self._row_to_snapshot(row)
 
     def verify_chain(self, source_id: str) -> SourcePolicyChainVerification:
-        history = self.history(source_id)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM source_policy_snapshots
+                WHERE source_id = ? ORDER BY version
+                """,
+                (source_id,),
+            ).fetchall()
+
         previous_hash: str | None = None
-        for snapshot in history:
-            body = self._hash_body(
-                snapshot_id=snapshot.snapshot_id,
-                source_id=snapshot.source_id,
-                version=snapshot.version,
-                policy=snapshot.policy,
-                stored_at=snapshot.stored_at,
-                previous_snapshot_hash=snapshot.previous_snapshot_hash,
-            )
+        for row in rows:
+            body: dict[str, object] = {
+                "snapshot_id": row["snapshot_id"],
+                "source_id": row["source_id"],
+                "version": row["version"],
+                "policy": json.loads(row["policy_json"]),
+                "stored_at": row["stored_at"],
+                "previous_snapshot_hash": row["previous_snapshot_hash"],
+            }
             expected = hash_record(body)
-            if (
-                snapshot.previous_snapshot_hash != previous_hash
-                or snapshot.snapshot_hash != expected
-            ):
+            if row["previous_snapshot_hash"] != previous_hash or row["snapshot_hash"] != expected:
                 return SourcePolicyChainVerification(
                     source_id=source_id,
                     valid=False,
-                    snapshots_checked=snapshot.version,
-                    failure_version=snapshot.version,
+                    snapshots_checked=row["version"],
+                    failure_version=row["version"],
                 )
-            previous_hash = snapshot.snapshot_hash
+            previous_hash = row["snapshot_hash"]
         return SourcePolicyChainVerification(
             source_id=source_id,
             valid=True,
-            snapshots_checked=len(history),
+            snapshots_checked=len(rows),
         )
 
     @staticmethod

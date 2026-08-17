@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from ballotproof.source_ingestion import ProvenanceReceipt, SourceAccessStatus
 from ballotproof.source_policy import SourcePolicySnapshot
+from ballotproof.source_security import SourceRequestPolicyError, validate_source_request
 
 
 class SchedulerModel(BaseModel):
@@ -24,6 +25,14 @@ class ReservationBlockReason(StrEnum):
     DUPLICATE_RESERVATION = "duplicate_reservation"
     BACKOFF = "backoff"
     RATE_LIMIT = "rate_limit"
+    INSECURE_SCHEME = "insecure_scheme"
+    USERINFO_NOT_ALLOWED = "userinfo_not_allowed"
+    HOST_NOT_ALLOWED = "host_not_allowed"
+    METHOD_NOT_ALLOWED = "method_not_allowed"
+    NONSTANDARD_PORT = "nonstandard_port"
+    UNSAFE_IP_LITERAL = "unsafe_ip_literal"
+    FRAGMENT_NOT_ALLOWED = "fragment_not_allowed"
+    UNSAFE_RESOLVED_ADDRESS = "unsafe_resolved_address"
 
 
 class SourceReservationRequest(SchedulerModel):
@@ -84,6 +93,7 @@ class SourceSchedulerStore:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 5000")
         return connection
 
     def reservations(self, source_id: str) -> list[SourceRequestReservation]:
@@ -120,6 +130,14 @@ class SourceSchedulerStore:
             return ReservationDecision(
                 allowed=False,
                 reason=ReservationBlockReason.POLICY_NOT_APPROVED,
+                retry_after_seconds=0,
+            )
+        try:
+            validate_source_request(policy, request.request_url, request.request_method)
+        except SourceRequestPolicyError as exc:
+            return ReservationDecision(
+                allowed=False,
+                reason=ReservationBlockReason(exc.reason.value),
                 retry_after_seconds=0,
             )
         if request.attempt > policy.max_attempts:

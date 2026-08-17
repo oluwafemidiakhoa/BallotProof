@@ -22,16 +22,31 @@ class SourceAccessStatus(StrEnum):
     PROHIBITED = "prohibited"
 
 
+def _normalize_policy_host(value: str) -> str:
+    host = value.strip().lower().rstrip(".")
+    if not host:
+        raise ValueError("allowed_hosts cannot contain empty hostnames")
+    if "://" in host or any(character in host for character in "/?#@:"):
+        raise ValueError("allowed_hosts must contain hostnames only, without schemes or ports")
+    try:
+        return host.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise ValueError(f"invalid source hostname: {value}") from exc
+
+
 class SourcePolicy(SourceModel):
     source_id: str = Field(min_length=1, max_length=128)
     provider: str = Field(min_length=1, max_length=128)
     base_url: HttpUrl | None = None
+    allowed_hosts: list[str] = Field(default_factory=list, max_length=32)
     access_status: SourceAccessStatus = SourceAccessStatus.REVIEW_REQUIRED
     terms_reviewed_at: datetime | None = None
     terms_reference: str | None = Field(default=None, max_length=1000)
     requests_per_minute: int = Field(default=6, ge=1, le=600)
     max_attempts: int = Field(default=3, ge=1, le=10)
     backoff_seconds: float = Field(default=1.0, ge=0, le=300)
+    request_timeout_seconds: float = Field(default=20.0, ge=1, le=120)
+    max_response_bytes: int = Field(default=50 * 1024 * 1024, ge=1, le=250 * 1024 * 1024)
     retry_status_codes: list[int] = Field(
         default_factory=lambda: [408, 425, 429, 500, 502, 503, 504]
     )
@@ -42,6 +57,22 @@ class SourcePolicy(SourceModel):
     def validate_policy(self) -> SourcePolicy:
         if self.access_status is SourceAccessStatus.APPROVED and self.terms_reviewed_at is None:
             raise ValueError("approved sources require terms_reviewed_at")
+        if self.access_status is SourceAccessStatus.APPROVED and self.base_url is None:
+            raise ValueError("approved sources require base_url")
+
+        normalized_hosts = list(dict.fromkeys(_normalize_policy_host(host) for host in self.allowed_hosts))
+        if self.base_url is not None:
+            if self.base_url.host is None:
+                raise ValueError("base_url must contain a hostname")
+            base_host = _normalize_policy_host(self.base_url.host)
+            if not normalized_hosts:
+                normalized_hosts = [base_host]
+            elif base_host not in normalized_hosts:
+                raise ValueError("allowed_hosts must include the base_url hostname")
+        self.allowed_hosts = normalized_hosts
+
+        if self.access_status is SourceAccessStatus.APPROVED and not self.allowed_hosts:
+            raise ValueError("approved sources require at least one allowed host")
         if len(self.retry_status_codes) != len(set(self.retry_status_codes)):
             raise ValueError("retry_status_codes must be unique")
         if any(code < 100 or code > 599 for code in self.retry_status_codes):
@@ -60,6 +91,7 @@ class CaptureRequest(SourceModel):
     last_modified: str | None = Field(default=None, max_length=1000)
     attempt: int = Field(default=1, ge=1, le=10)
     request_key: str | None = Field(default=None, min_length=1, max_length=256)
+    reservation_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class ProvenanceReceipt(SourceModel):
@@ -75,6 +107,7 @@ class ProvenanceReceipt(SourceModel):
     last_modified: str | None = None
     attempt: int
     request_key: str | None = None
+    reservation_id: str | None = None
     raw_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     raw_size_bytes: int = Field(ge=1)
     policy_status: SourceAccessStatus
@@ -111,6 +144,7 @@ class SourceCaptureStore:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 5000")
         return connection
 
     @staticmethod
@@ -141,6 +175,7 @@ class SourceCaptureStore:
         ):
             raise ValueError("policy_snapshot_hash must be a lowercase SHA-256 hex digest")
 
+        effective_max_bytes = min(max_bytes, policy.max_response_bytes)
         temp_path = self.root / f".source-{uuid4().hex}"
         digest = hashlib.sha256()
         size = 0
@@ -148,8 +183,10 @@ class SourceCaptureStore:
             with temp_path.open("xb") as destination:
                 while chunk := stream.read(1024 * 1024):
                     size += len(chunk)
-                    if size > max_bytes:
-                        raise ValueError(f"source response exceeds {max_bytes} byte limit")
+                    if size > effective_max_bytes:
+                        raise ValueError(
+                            f"source response exceeds {effective_max_bytes} byte limit"
+                        )
                     digest.update(chunk)
                     destination.write(chunk)
             if size == 0:
@@ -177,6 +214,7 @@ class SourceCaptureStore:
                 last_modified=request.last_modified,
                 attempt=request.attempt,
                 request_key=request.request_key,
+                reservation_id=request.reservation_id,
                 raw_sha256=sha256,
                 raw_size_bytes=size,
                 policy_status=policy.access_status,

@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
@@ -14,8 +14,9 @@ from ballotproof.source_ingestion import (
     SourceAccessStatus,
     SourceCaptureStore,
 )
-from ballotproof.source_policy import SourcePolicySnapshot
+from ballotproof.source_policy import SourcePolicySnapshot, SourcePolicyStore
 from ballotproof.source_scheduler import SourceRequestReservation
+from ballotproof.source_security import validate_source_request
 
 
 class TransportModel(BaseModel):
@@ -23,11 +24,17 @@ class TransportModel(BaseModel):
 
 
 class TransportRequest(TransportModel):
+    reservation_id: str
     source_id: str
+    policy_snapshot_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     request_url: HttpUrl
     request_method: str
     request_key: str
     attempt: int = Field(ge=1)
+    allowed_hosts: list[str]
+    timeout_seconds: float = Field(ge=1, le=120)
+    max_response_bytes: int = Field(ge=1)
+    follow_redirects: Literal[False] = False
 
 
 class TransportResponse(TransportModel):
@@ -66,11 +73,17 @@ class TransportExecutionRecord(TransportModel):
 
 
 class SourceTransportExecutor:
-    def __init__(self, root: str | Path, capture_store: SourceCaptureStore | None = None) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        capture_store: SourceCaptureStore | None = None,
+        policy_store: SourcePolicyStore | None = None,
+    ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.db_path = self.root / "source_transport.sqlite3"
         self.capture_store = capture_store or SourceCaptureStore(self.root)
+        self.policy_store = policy_store or SourcePolicyStore(self.root)
         with self._connect() as connection:
             connection.execute(
                 """
@@ -92,6 +105,7 @@ class SourceTransportExecutor:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 5000")
         return connection
 
     def execution(self, reservation_id: str) -> TransportExecutionRecord:
@@ -110,19 +124,30 @@ class SourceTransportExecutor:
         snapshot: SourcePolicySnapshot,
         reservation: SourceRequestReservation,
         transport: SourceTransport,
-        max_bytes: int = 50 * 1024 * 1024,
+        max_bytes: int | None = None,
         started_at: datetime | None = None,
     ) -> CapturedResponse:
-        self._validate_binding(snapshot, reservation)
+        current = self._validate_binding(snapshot, reservation)
+        policy = current.policy
+        effective_max_bytes = policy.max_response_bytes
+        if max_bytes is not None:
+            effective_max_bytes = min(effective_max_bytes, max_bytes)
+
         start = started_at or datetime.now(UTC)
         self._claim(reservation, start)
 
         request = TransportRequest(
+            reservation_id=reservation.reservation_id,
             source_id=reservation.source_id,
+            policy_snapshot_hash=current.snapshot_hash,
             request_url=reservation.request_url,
             request_method=reservation.request_method,
             request_key=reservation.request_key,
             attempt=reservation.attempt,
+            allowed_hosts=policy.allowed_hosts,
+            timeout_seconds=policy.request_timeout_seconds,
+            max_response_bytes=effective_max_bytes,
+            follow_redirects=False,
         )
         try:
             response = transport.send(request)
@@ -135,11 +160,13 @@ class SourceTransportExecutor:
             raise
 
         try:
-            if len(response.body) > max_bytes:
-                raise ValueError(f"source response exceeds {max_bytes} byte limit")
+            if len(response.body) > effective_max_bytes:
+                raise ValueError(
+                    f"source response exceeds {effective_max_bytes} byte limit"
+                )
             captured = self.capture_store.capture(
                 stream=_BytesReader(response.body),
-                policy=snapshot.policy,
+                policy=policy,
                 request=CaptureRequest(
                     source_id=reservation.source_id,
                     request_url=reservation.request_url,
@@ -151,9 +178,10 @@ class SourceTransportExecutor:
                     last_modified=response.last_modified,
                     attempt=reservation.attempt,
                     request_key=reservation.request_key,
+                    reservation_id=reservation.reservation_id,
                 ),
-                policy_snapshot_hash=snapshot.snapshot_hash,
-                max_bytes=max_bytes,
+                policy_snapshot_hash=current.snapshot_hash,
+                max_bytes=effective_max_bytes,
             )
         except Exception:
             self._finish(
@@ -170,22 +198,37 @@ class SourceTransportExecutor:
         )
         return captured
 
-    @staticmethod
     def _validate_binding(
+        self,
         snapshot: SourcePolicySnapshot,
         reservation: SourceRequestReservation,
-    ) -> None:
-        policy = snapshot.policy
-        if policy.access_status is not SourceAccessStatus.APPROVED:
+    ) -> SourcePolicySnapshot:
+        try:
+            current = self.policy_store.latest(reservation.source_id)
+        except KeyError as exc:
+            raise PermissionError("source policy is missing at transport execution time") from exc
+        if current.policy.access_status is not SourceAccessStatus.APPROVED:
             raise PermissionError("source policy is not approved for transport execution")
-        if reservation.source_id != policy.source_id:
-            raise ValueError("reservation source_id does not match policy snapshot")
-        if reservation.policy_version != snapshot.version:
-            raise ValueError("reservation policy version does not match policy snapshot")
-        if reservation.policy_snapshot_hash != snapshot.snapshot_hash:
-            raise ValueError("reservation policy hash does not match policy snapshot")
-        if reservation.attempt > policy.max_attempts:
+        if (
+            snapshot.source_id != current.source_id
+            or snapshot.version != current.version
+            or snapshot.snapshot_hash != current.snapshot_hash
+        ):
+            raise PermissionError("source policy snapshot is no longer current")
+        if reservation.source_id != current.policy.source_id:
+            raise ValueError("reservation source_id does not match current policy snapshot")
+        if reservation.policy_version != current.version:
+            raise PermissionError("reservation policy version is no longer current")
+        if reservation.policy_snapshot_hash != current.snapshot_hash:
+            raise PermissionError("reservation policy hash is no longer current")
+        if reservation.attempt > current.policy.max_attempts:
             raise ValueError("reservation attempt exceeds source policy max_attempts")
+        validate_source_request(
+            current.policy,
+            reservation.request_url,
+            reservation.request_method,
+        )
+        return current
 
     def _claim(self, reservation: SourceRequestReservation, started_at: datetime) -> None:
         try:
