@@ -60,7 +60,7 @@ SourceType = Literal[
 
 app = FastAPI(
     title="BallotProof API",
-    version="0.10.0",
+    version="0.11.0",
     description=(
         "Evidence-preserving primitives for election verification, including versioned election "
         "registries, source governance, immutable evidence, review, attestations, and replay."
