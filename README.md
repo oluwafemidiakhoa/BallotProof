@@ -17,8 +17,8 @@ It is not an election authority, a winner-prediction system, or an AI judge. The
 - Human review records that accept, correct, or reject extracted fields without mutating model output.
 - Polling-unit evidence bundles containing versions, chain verification, attestations, extraction, and review history.
 - Deterministic arithmetic/accreditation checks and source-to-source reconciliation.
-- Source-neutral single-edge collation replay with explicit expected units, coverage, missing/unexpected units, computed totals, and declared-result deltas.
-- Multi-level collation DAG replay that refuses to promote incomplete child nodes into parent totals.
+- Source-neutral single-edge and multi-level collation replay with explicit expected units, completeness, missing/unexpected inputs, computed totals, and declared-result deltas.
+- Multi-level replay refuses to promote incomplete child collations into parent totals.
 - Next.js public evidence explorer using clearly labelled synthetic data.
 - Python tests and GitHub Actions CI.
 
@@ -47,7 +47,7 @@ Open `http://127.0.0.1:8000/docs` for the generated API explorer.
 4. `POST /v1/attestations` — verify and retain an Ed25519-signed actor statement.
 5. `GET /v1/elections/{election_id}/polling-units/{polling_unit_code}` — retrieve the complete public evidence bundle.
 6. `POST /v1/collation/replay` — reproduce one aggregation edge from an explicit expected unit set.
-7. `POST /v1/collation/replay-graph` — replay a multi-level acyclic collation graph while blocking incomplete child nodes from propagating upward.
+7. `POST /v1/collation/replay-graph` — replay a multi-level collation DAG without silently promoting incomplete child nodes.
 
 The original fingerprint-only endpoint remains available at `POST /v1/evidence/fingerprint` for clients that want hashing without persistence.
 
@@ -65,7 +65,6 @@ Read:
 - [`docs/EXTRACTION_REVIEW.md`](docs/EXTRACTION_REVIEW.md)
 - [`docs/EXTRACTION_ADAPTERS.md`](docs/EXTRACTION_ADAPTERS.md)
 - [`docs/COLLATION_REPLAY.md`](docs/COLLATION_REPLAY.md)
-- [`docs/MULTILEVEL_REPLAY.md`](docs/MULTILEVEL_REPLAY.md)
 
 ## Web
 
@@ -94,12 +93,11 @@ Completed foundation:
 3. Evidence ingestion, extraction/review records, and polling-unit evidence retrieval.
 4. Public evidence explorer contract.
 5. Provider-neutral extraction adapter manifests.
-6. Single-edge collation replay with completeness and discrepancy reporting.
-7. Multi-level polling-unit → ward → LGA → state/constituency replay graph.
+6. Single-edge and multi-level collation replay with conservative completeness propagation.
 
 Next:
 
-1. Election registry/versioning for authoritative expected-unit topology and candidate metadata.
+1. Versioned election registry for offices, candidates, expected polling units, and collation topology.
 2. Real source adapters with rate limiting, provenance receipts, and source-policy review.
 3. Downloadable Parquet/CSV/JSON snapshots and signed manifests.
 4. Merkle checkpoints and independent mirror verification.
