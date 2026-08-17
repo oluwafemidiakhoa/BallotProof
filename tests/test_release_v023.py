@@ -29,7 +29,13 @@ def _registry_payload(*, retrieved_at):
             source_sha256="a" * 64,
         ),
         offices=[RegistryOffice(office_id="president", name="President", level="national")],
-        units=[RegistryUnit(unit_id="PU-001", unit_type="polling_unit", name="Demo Polling Unit")],
+        units=[
+            RegistryUnit(
+                unit_id="PU-001",
+                unit_type="polling_unit",
+                name="Demo Polling Unit",
+            )
+        ],
     )
 
 
@@ -55,9 +61,22 @@ def _semantic_fixture(local_suffix: str) -> list[ReleaseRecord]:
                         "retrieved_at": f"2026-08-17T0{local_suffix}:00:00Z",
                         "source_sha256": "a" * 64,
                     },
-                    "offices": [{"office_id": "president", "name": "President", "level": "national"}],
+                    "offices": [
+                        {
+                            "office_id": "president",
+                            "name": "President",
+                            "level": "national",
+                        }
+                    ],
                     "candidates": [],
-                    "units": [{"unit_id": "PU-001", "unit_type": "polling_unit", "name": "Demo Polling Unit", "parent_id": None}],
+                    "units": [
+                        {
+                            "unit_id": "PU-001",
+                            "unit_type": "polling_unit",
+                            "name": "Demo Polling Unit",
+                            "parent_id": None,
+                        }
+                    ],
                     "topology": [],
                 },
                 "stored_at": f"2026-08-17T0{local_suffix}:01:00Z",
@@ -74,7 +93,11 @@ def _semantic_fixture(local_suffix: str) -> list[ReleaseRecord]:
                 "election_id": "demo-election",
                 "polling_unit_code": "PU-001",
                 "document_type": "EC8A",
-                "source": {"provider": "Observer", "source_type": "observer_capture", "source_url": "https://example.test/evidence.png"},
+                "source": {
+                    "provider": "Observer",
+                    "source_type": "observer_capture",
+                    "source_url": "https://example.test/evidence.png",
+                },
                 "artifact_sha256": "b" * 64,
                 "artifact_size_bytes": 123,
                 "media_type": "image/png",
@@ -94,8 +117,23 @@ def _semantic_fixture(local_suffix: str) -> list[ReleaseRecord]:
                 "evidence_version": 7,
                 "record_hash": "d" * 64,
                 "status": "human_reviewed",
-                "provenance": {"engine": "fixture", "model_id": "fixture-model", "model_version": "1", "created_at": f"2026-08-17T0{local_suffix}:03:00Z", "config_hash": "e" * 64},
-                "fields": [{"field_name": "valid_votes", "raw_value": "100", "normalized_value": 100, "confidence": 0.99, "page": 1, "bbox": None}],
+                "provenance": {
+                    "engine": "fixture",
+                    "model_id": "fixture-model",
+                    "model_version": "1",
+                    "created_at": f"2026-08-17T0{local_suffix}:03:00Z",
+                    "config_hash": "e" * 64,
+                },
+                "fields": [
+                    {
+                        "field_name": "valid_votes",
+                        "raw_value": "100",
+                        "normalized_value": 100,
+                        "confidence": 0.99,
+                        "page": 1,
+                        "bbox": None,
+                    }
+                ],
                 "supersedes_extraction_id": None,
                 "stored_at": f"2026-08-17T0{local_suffix}:04:00Z",
             },
@@ -109,7 +147,14 @@ def _semantic_fixture(local_suffix: str) -> list[ReleaseRecord]:
                 "evidence_id": evidence_id,
                 "evidence_version": 7,
                 "reviewer_id": "reviewer:one",
-                "fields": [{"field_name": "valid_votes", "decision": "accept", "corrected_value": None, "note": None}],
+                "fields": [
+                    {
+                        "field_name": "valid_votes",
+                        "decision": "accept",
+                        "corrected_value": None,
+                        "note": None,
+                    }
+                ],
                 "stored_at": f"2026-08-17T0{local_suffix}:05:00Z",
             },
         ),
@@ -124,7 +169,9 @@ def test_semantic_root_ignores_ballotproof_local_ids_and_storage_timestamps():
 
 
 def test_atomic_release_emits_signed_semantic_summary(tmp_path):
-    ElectionRegistryStore(tmp_path).append(_registry_payload(retrieved_at="2026-08-17T01:00:00Z"))
+    ElectionRegistryStore(tmp_path).append(
+        _registry_payload(retrieved_at="2026-08-17T01:00:00Z")
+    )
     key = Ed25519PrivateKey.generate()
     release_dir = tmp_path / "release"
     summary = build_atomic_release(tmp_path, "demo-election", release_dir, key)
@@ -137,7 +184,9 @@ def test_atomic_release_emits_signed_semantic_summary(tmp_path):
 
 
 def test_semantic_verification_detects_summary_tampering(tmp_path):
-    ElectionRegistryStore(tmp_path).append(_registry_payload(retrieved_at="2026-08-17T01:00:00Z"))
+    ElectionRegistryStore(tmp_path).append(
+        _registry_payload(retrieved_at="2026-08-17T01:00:00Z")
+    )
     key = Ed25519PrivateKey.generate()
     release_dir = tmp_path / "release"
     build_atomic_release(tmp_path, "demo-election", release_dir, key)
