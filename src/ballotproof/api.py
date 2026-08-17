@@ -11,6 +11,11 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from ballotproof.attestations import verify_attestation
 from ballotproof.collation import CollationReplayReport, CollationReplayRequest, replay_collation
+from ballotproof.collation_graph import (
+    CollationGraphReport,
+    CollationGraphRequest,
+    replay_collation_graph,
+)
 from ballotproof.models import (
     ChainVerification,
     EvidenceFingerprint,
@@ -43,7 +48,7 @@ SourceType = Literal[
 
 app = FastAPI(
     title="BallotProof API",
-    version="0.4.0",
+    version="0.5.0",
     description=(
         "Evidence-preserving primitives for election verification. BallotProof stores source "
         "artifacts, exposes provenance, and keeps machine extraction separate from human review."
@@ -79,6 +84,15 @@ def reconcile(request: ReconciliationRequest) -> ReconciliationReport:
 )
 def replay_collation_endpoint(request: CollationReplayRequest) -> CollationReplayReport:
     return replay_collation(request)
+
+
+@app.post(
+    "/v1/collation/replay-graph",
+    response_model=CollationGraphReport,
+    tags=["verification"],
+)
+def replay_collation_graph_endpoint(request: CollationGraphRequest) -> CollationGraphReport:
+    return replay_collation_graph(request)
 
 
 @app.post("/v1/evidence/fingerprint", response_model=EvidenceFingerprint, tags=["evidence"])
