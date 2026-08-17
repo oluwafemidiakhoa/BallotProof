@@ -3,8 +3,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from ballotproof.source_automation import (
-    AutomationRunStatus,
     AutomaticAcquisitionWorker,
+    AutomationRunStatus,
     SourceAutomationPlanRequest,
     SourceAutomationStore,
 )
