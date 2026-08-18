@@ -1,0 +1,48 @@
+# This worker template is deliberately scaled to zero.
+# Do not enable live acquisition until the specific source has an approved policy,
+# explicit immutable-retention permission, and a current trusted signed approval.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ballotproof-source-worker
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: ballotproof-source-worker
+  template:
+    metadata:
+      labels:
+        app: ballotproof-source-worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: ballotproof:0.27.0
+          command: ["ballotproof-postgres"]
+          args:
+            - worker
+            - --data-dir
+            - /var/lib/ballotproof
+            - --transport
+            - REPLACE_WITH_APPROVED_SOURCE=trusted.module:Transport
+          env:
+            - name: BALLOTPROOF_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ballotproof-runtime
+                  key: database-url
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/ballotproof
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ballotproof-shared-data

@@ -1,6 +1,3 @@
-from ballotproof.api import app
-from ballotproof.source_api import router as source_router
-
-app.include_router(source_router)
+from ballotproof.production_api import app
 
 __all__ = ["app"]

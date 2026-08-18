@@ -1,0 +1,117 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ballotproof-postgres-init
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: ballotproof:0.27.0
+          command: ["ballotproof-postgres"]
+          args: ["init"]
+          env:
+            - name: BALLOTPROOF_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ballotproof-runtime
+                  key: database-url
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ballotproof-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ballotproof-api
+  template:
+    metadata:
+      labels:
+        app: ballotproof-api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: ballotproof:0.27.0
+          command: ["uvicorn"]
+          args:
+            - ballotproof.production_api:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+            - --no-proxy-headers
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: BALLOTPROOF_PRIMARY_STORE
+              value: postgres
+            - name: BALLOTPROOF_RATE_LIMIT_BACKEND
+              value: postgres
+            - name: BALLOTPROOF_API_READS_PER_MINUTE
+              value: "6000"
+            - name: BALLOTPROOF_API_WRITES_PER_MINUTE
+              value: "1200"
+            - name: BALLOTPROOF_API_MAX_BODY_BYTES
+              value: "31457280"
+            - name: BALLOTPROOF_DATA_DIR
+              value: /var/lib/ballotproof
+            - name: BALLOTPROOF_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ballotproof-runtime
+                  key: database-url
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/ballotproof
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ballotproof-shared-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ballotproof-api
+spec:
+  selector:
+    app: ballotproof-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
