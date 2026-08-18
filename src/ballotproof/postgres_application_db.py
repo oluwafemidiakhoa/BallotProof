@@ -116,12 +116,14 @@ class PostgresApplicationDatabaseMixin:
         finally:
             connection.close()
 
+    @staticmethod
     def _database_now(connection: Any) -> datetime:
         row = connection.execute("SELECT clock_timestamp() AS database_now").fetchone()
         if row is None or not isinstance(row.get("database_now"), datetime):
             raise RuntimeError("PostgreSQL database clock returned no timestamp")
         return row["database_now"]
 
+    @staticmethod
     def _lock_stream(connection: Any, stream_key: str) -> None:
         connection.execute(
             f"""
@@ -143,6 +145,7 @@ class PostgresApplicationDatabaseMixin:
         if row is None:
             raise RuntimeError("PostgreSQL application stream lock was not acquired")
 
+    @staticmethod
     def _row_to_record(row: Any) -> ReleaseRecord:
         record = ReleaseRecord(
             record_type=row["record_type"],
