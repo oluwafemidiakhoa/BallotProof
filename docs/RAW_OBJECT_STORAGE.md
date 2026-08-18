@@ -45,9 +45,11 @@ Install S3 support with:
 pip install 'ballotproof[s3]'
 ```
 
-## Production API behavior
+## Production API and worker behavior
 
-`ballotproof.production_api:app` now installs object-backed evidence storage for both SQLite and PostgreSQL primary metadata modes, and installs the same raw-object backend for source-capture API paths. `/ready` reports the configured primary metadata store and raw-object backend.
+`ballotproof.production_api:app` installs object-backed evidence storage for both SQLite and PostgreSQL primary metadata modes, and installs the same raw-object backend for source-capture API paths. `/ready` reports the configured primary metadata store and raw-object backend.
+
+The PostgreSQL fenced acquisition runtime uses that same object-backed source capture store. This keeps Neon PostgreSQL responsible for production metadata/application state while source-response bytes are retained in the configured immutable raw-object backend. Fencing still guards the capture mutation: a stale worker cannot persist a protected capture after losing its current fencing token.
 
 The base development API and legacy store classes keep their existing filesystem behavior so migrations are explicit rather than silently relocating existing bytes.
 

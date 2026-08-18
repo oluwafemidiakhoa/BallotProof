@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ballotproof.postgres_leases import PostgresFencedLease, PostgresFencedLeaseStore
+from ballotproof.production_stores import ObjectBackedSourceCaptureStore
 from ballotproof.source_approval import ApprovalEnforcingAcquisitionWorker, SourceApprovalStore
 from ballotproof.source_automation import SourceAutomationStore
 from ballotproof.source_ingestion import SourceCaptureStore
@@ -156,11 +157,14 @@ class PostgresFencedAcquisitionRuntime:
         self.lease_store = ContextualFencedLeaseStore(lease_store, self.context)
         policy_store = SourcePolicyStore(root)
         scheduler_store = GuardedSchedulerStore(SourceSchedulerStore(root), self.context)
-        capture_store = GuardedCaptureStore(SourceCaptureStore(root), self.context)
+        self.capture_store = GuardedCaptureStore(
+            ObjectBackedSourceCaptureStore(root),
+            self.context,
+        )
         automation_store = GuardedAutomationStore(SourceAutomationStore(root), self.context)
         executor = GuardedSourceTransportExecutor(
             root,
-            capture_store=capture_store,
+            capture_store=self.capture_store,
             policy_store=policy_store,
             fencing_context=self.context,
         )
@@ -169,7 +173,7 @@ class PostgresFencedAcquisitionRuntime:
             approval_store=approval_store,
             policy_store=policy_store,
             scheduler_store=scheduler_store,
-            capture_store=capture_store,
+            capture_store=self.capture_store,
             automation_store=automation_store,
             executor=executor,
         )

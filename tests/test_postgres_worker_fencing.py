@@ -11,6 +11,7 @@ from ballotproof.postgres_worker import (
     GuardedAutomationStore,
     PostgresFencedAcquisitionRuntime,
 )
+from ballotproof.production_stores import ObjectBackedSourceCaptureStore
 from ballotproof.source_approval import ApprovalEnforcingAcquisitionWorker
 
 
@@ -95,3 +96,14 @@ def test_fenced_runtime_preserves_source_approval_enforcement(tmp_path) -> None:
     )
 
     assert isinstance(runtime.acquisition_worker, ApprovalEnforcingAcquisitionWorker)
+
+
+def test_fenced_runtime_uses_production_raw_object_capture(tmp_path) -> None:
+    runtime = PostgresFencedAcquisitionRuntime(
+        tmp_path,
+        _LeaseStore(),
+        _ApprovalStore(),
+    )
+
+    assert isinstance(runtime.capture_store.store, ObjectBackedSourceCaptureStore)
+    assert runtime.acquisition_worker.capture_store is runtime.capture_store
