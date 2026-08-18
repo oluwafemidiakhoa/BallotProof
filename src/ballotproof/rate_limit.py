@@ -12,8 +12,8 @@ from starlette.concurrency import run_in_threadpool
 
 from ballotproof.postgres_db import (
     ConnectionFactory,
-    POSTGRES_SCHEMA,
     database_url_from_env,
+    POSTGRES_SCHEMA,
     psycopg_connection_factory,
 )
 

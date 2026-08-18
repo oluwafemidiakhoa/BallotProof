@@ -35,6 +35,7 @@ class PostgresReleaseSnapshotView(PostgresRuntimeModel):
     records: list[ReleaseRecord]
 
 
+
 def _ordered_records(records: list[ReleaseRecord]) -> list[ReleaseRecord]:
     return sorted(records, key=lambda item: (item.record_type, item.record_key))
 
