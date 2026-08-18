@@ -7,8 +7,14 @@ from collections.abc import Awaitable, Callable
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
+from ballotproof import __version__
 from ballotproof.auth import Permission
 from ballotproof.auth_api import get_auth_store
+from ballotproof.rate_limit import (
+    RateLimitMiddleware,
+    build_rate_limiter_from_env,
+    rate_limits_from_env,
+)
 
 _ROUTE_PERMISSIONS: tuple[tuple[str, re.Pattern[str], Permission], ...] = (
     ("POST", re.compile(r"^/v1/registry/snapshots$"), Permission.MANAGE_REGISTRY),
@@ -40,6 +46,8 @@ def _required_permission(method: str, path: str) -> Permission | None:
 
 
 def install_auth_middleware(app) -> None:
+    app.version = __version__
+
     @app.middleware("http")
     async def authorize_persistent_writes(
         request: Request,
@@ -84,3 +92,11 @@ def install_auth_middleware(app) -> None:
                     content={"detail": "approver_id must match the authenticated identity"},
                 )
         return await call_next(request)
+
+    read_limit, write_limit = rate_limits_from_env()
+    app.add_middleware(
+        RateLimitMiddleware,
+        limiter=build_rate_limiter_from_env(),
+        read_limit_per_minute=read_limit,
+        write_limit_per_minute=write_limit,
+    )

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ballotproof"
-version = "0.25.0"
+version = "0.26.0"
 description = "Independent, reproducible election evidence verification primitives."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -22,6 +22,7 @@ dependencies = [
 [project.scripts]
 ballotproof = "ballotproof.cli:main"
 ballotproof-publication = "ballotproof.publication_cli:main"
+ballotproof-postgres = "ballotproof.postgres_cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -31,6 +32,9 @@ dev = [
 ]
 s3 = [
   "boto3>=1.37.32,<2",
+]
+postgres = [
+  "psycopg[binary,pool]>=3.3,<4",
 ]
 
 [tool.hatch.build.targets.wheel]
