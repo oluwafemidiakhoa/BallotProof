@@ -53,8 +53,28 @@ The PostgreSQL fenced acquisition runtime uses that same object-backed source ca
 
 The base development API and legacy store classes keep their existing filesystem behavior so migrations are explicit rather than silently relocating existing bytes.
 
+## Legacy-object migration and equivalence
+
+v0.28 includes a dry-run-first migration verifier for legacy `objects/` and `source_objects/` trees. Run the verifier before changing a production deployment:
+
+```text
+python -m ballotproof.legacy_object_migration --root /srv/ballotproof
+```
+
+Dry-run mode hashes every legacy file independently, requires each content-addressed filename to equal its computed SHA-256, rejects empty objects, and reports the deterministic v0.28 target path without writing anything.
+
+After reviewing a clean report, use the configured raw-object backend explicitly:
+
+```text
+python -m ballotproof.legacy_object_migration --root /srv/ballotproof --apply
+```
+
+Apply mode writes through the same `RawObjectStore` used by production. Every copied object is verified through the backend reference and read back again; the migration report only marks an object migrated when its target byte length and SHA-256 are equivalent to the legacy file.
+
+The tool is intentionally non-destructive. It never deletes or rewrites `objects/` or `source_objects/`. Operators must retain the legacy trees until the migration report is clean, deployment configuration has been switched deliberately, and independent operational checks have confirmed the new backend is serving all referenced raw objects.
+
 ## Migration boundary
 
-v0.28 does not claim that existing `objects/` or `source_objects/` files have been migrated. Operators must copy and independently verify existing content by SHA-256 before switching a deployment to S3 raw-object mode. A deployment must not delete its legacy raw-object files until every referenced digest has been confirmed in the target immutable store.
+A deployment must not delete its legacy raw-object files until every referenced digest has been confirmed in the target immutable store. Migration equivalence proves byte-for-byte preservation of discovered legacy raw objects; it does not prove upstream completeness, legal acquisition, authenticity, or substantive correctness of the captured evidence.
 
-Raw-object retention strengthens durability and multi-replica deployment safety. It does not prove upstream completeness, legal acquisition, authenticity, or substantive correctness of the captured evidence.
+Raw-object retention strengthens durability and multi-replica deployment safety. It does not replace source governance, provenance review, or release verification.
