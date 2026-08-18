@@ -7,12 +7,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ballotproof.postgres_db import (
-    ConnectionFactory,
-    POSTGRES_SCHEMA,
-    database_url_from_env,
-    psycopg_connection_factory,
-)
+from ballotproof import postgres_db
 from ballotproof.provenance import canonical_json_bytes
 from ballotproof.releases import ReleaseRecord, collect_release_records
 from ballotproof.write_barrier import ReleaseWriteBarrier
@@ -33,7 +28,6 @@ class PostgresReleaseSnapshot(PostgresRuntimeModel):
 class PostgresReleaseSnapshotView(PostgresRuntimeModel):
     snapshot: PostgresReleaseSnapshot
     records: list[ReleaseRecord]
-
 
 
 def _ordered_records(records: list[ReleaseRecord]) -> list[ReleaseRecord]:
@@ -58,21 +52,21 @@ class PostgresReleaseLedger:
         self,
         database_url: str | None = None,
         *,
-        connection_factory: ConnectionFactory | None = None,
+        connection_factory: postgres_db.ConnectionFactory | None = None,
     ) -> None:
         if connection_factory is None:
-            connection_factory = psycopg_connection_factory(
-                database_url if database_url is not None else database_url_from_env()
+            connection_factory = postgres_db.psycopg_connection_factory(
+                database_url if database_url is not None else postgres_db.database_url_from_env()
             )
         self._connection_factory = connection_factory
 
     def initialize(self) -> None:
         connection = self._connection_factory()
         try:
-            connection.execute(f"CREATE SCHEMA IF NOT EXISTS {POSTGRES_SCHEMA}")
+            connection.execute(f"CREATE SCHEMA IF NOT EXISTS {postgres_db.POSTGRES_SCHEMA}")
             connection.execute(
                 f"""
-                CREATE TABLE IF NOT EXISTS {POSTGRES_SCHEMA}.release_snapshots (
+                CREATE TABLE IF NOT EXISTS {postgres_db.POSTGRES_SCHEMA}.release_snapshots (
                     snapshot_id TEXT PRIMARY KEY,
                     election_id TEXT NOT NULL,
                     records_sha256 TEXT NOT NULL,
@@ -84,16 +78,16 @@ class PostgresReleaseLedger:
             connection.execute(
                 f"""
                 CREATE INDEX IF NOT EXISTS release_snapshots_election_created
-                ON {POSTGRES_SCHEMA}.release_snapshots (
+                ON {postgres_db.POSTGRES_SCHEMA}.release_snapshots (
                     election_id, created_at DESC, snapshot_id DESC
                 )
                 """
             )
             connection.execute(
                 f"""
-                CREATE TABLE IF NOT EXISTS {POSTGRES_SCHEMA}.release_snapshot_records (
+                CREATE TABLE IF NOT EXISTS {postgres_db.POSTGRES_SCHEMA}.release_snapshot_records (
                     snapshot_id TEXT NOT NULL REFERENCES
-                        {POSTGRES_SCHEMA}.release_snapshots(snapshot_id),
+                        {postgres_db.POSTGRES_SCHEMA}.release_snapshots(snapshot_id),
                     ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
                     record_type TEXT NOT NULL,
                     record_key TEXT NOT NULL,
@@ -125,7 +119,7 @@ class PostgresReleaseLedger:
             connection.execute("BEGIN")
             inserted = connection.execute(
                 f"""
-                INSERT INTO {POSTGRES_SCHEMA}.release_snapshots (
+                INSERT INTO {postgres_db.POSTGRES_SCHEMA}.release_snapshots (
                     snapshot_id, election_id, records_sha256, record_count
                 ) VALUES (%s, %s, %s, %s)
                 ON CONFLICT (snapshot_id) DO NOTHING
@@ -137,7 +131,7 @@ class PostgresReleaseLedger:
                 existing = connection.execute(
                     f"""
                     SELECT snapshot_id, election_id, records_sha256, record_count, created_at
-                    FROM {POSTGRES_SCHEMA}.release_snapshots
+                    FROM {postgres_db.POSTGRES_SCHEMA}.release_snapshots
                     WHERE snapshot_id = %s
                     """,
                     (snapshot_id,),
@@ -152,7 +146,7 @@ class PostgresReleaseLedger:
                 record_sha256 = hashlib.sha256(canonical_json_bytes(record_data)).hexdigest()
                 connection.execute(
                     f"""
-                    INSERT INTO {POSTGRES_SCHEMA}.release_snapshot_records (
+                    INSERT INTO {postgres_db.POSTGRES_SCHEMA}.release_snapshot_records (
                         snapshot_id, ordinal, record_type, record_key,
                         payload_json, record_sha256
                     ) VALUES (%s, %s, %s, %s, CAST(%s AS JSONB), %s)
@@ -192,7 +186,7 @@ class PostgresReleaseLedger:
             row = connection.execute(
                 f"""
                 SELECT snapshot_id, election_id, records_sha256, record_count, created_at
-                FROM {POSTGRES_SCHEMA}.release_snapshots
+                FROM {postgres_db.POSTGRES_SCHEMA}.release_snapshots
                 WHERE election_id = %s
                 ORDER BY created_at DESC, snapshot_id DESC
                 LIMIT 1
@@ -205,7 +199,7 @@ class PostgresReleaseLedger:
             rows = connection.execute(
                 f"""
                 SELECT ordinal, record_type, record_key, payload_json, record_sha256
-                FROM {POSTGRES_SCHEMA}.release_snapshot_records
+                FROM {postgres_db.POSTGRES_SCHEMA}.release_snapshot_records
                 WHERE snapshot_id = %s
                 ORDER BY ordinal
                 """,
@@ -234,4 +228,3 @@ class PostgresReleaseLedger:
             raise
         finally:
             connection.close()
-

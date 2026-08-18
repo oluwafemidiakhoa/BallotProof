@@ -5,12 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ballotproof.postgres_db import (
-    ConnectionFactory,
-    database_url_from_env,
-    POSTGRES_SCHEMA,
-    psycopg_connection_factory,
-)
+from ballotproof import postgres_db
 
 
 class PostgresLeaseModel(BaseModel):
@@ -32,11 +27,11 @@ class PostgresFencedLeaseStore:
         self,
         database_url: str | None = None,
         *,
-        connection_factory: ConnectionFactory | None = None,
+        connection_factory: postgres_db.ConnectionFactory | None = None,
     ) -> None:
         if connection_factory is None:
-            connection_factory = psycopg_connection_factory(
-                database_url if database_url is not None else database_url_from_env()
+            connection_factory = postgres_db.psycopg_connection_factory(
+                database_url if database_url is not None else postgres_db.database_url_from_env()
             )
         self._connection_factory = connection_factory
         self._held_tokens: dict[str, int] = {}
@@ -44,10 +39,10 @@ class PostgresFencedLeaseStore:
     def initialize(self) -> None:
         connection = self._connection_factory()
         try:
-            connection.execute(f"CREATE SCHEMA IF NOT EXISTS {POSTGRES_SCHEMA}")
+            connection.execute(f"CREATE SCHEMA IF NOT EXISTS {postgres_db.POSTGRES_SCHEMA}")
             connection.execute(
                 f"""
-                CREATE TABLE IF NOT EXISTS {POSTGRES_SCHEMA}.worker_leases (
+                CREATE TABLE IF NOT EXISTS {postgres_db.POSTGRES_SCHEMA}.worker_leases (
                     lease_name TEXT PRIMARY KEY,
                     worker_id TEXT NOT NULL,
                     fencing_token BIGINT NOT NULL CHECK (fencing_token > 0),
@@ -78,7 +73,7 @@ class PostgresFencedLeaseStore:
             connection.execute("BEGIN")
             inserted = connection.execute(
                 f"""
-                INSERT INTO {POSTGRES_SCHEMA}.worker_leases (
+                INSERT INTO {postgres_db.POSTGRES_SCHEMA}.worker_leases (
                     lease_name, worker_id, fencing_token, acquired_at, expires_at
                 ) VALUES (
                     %s, %s, 1, clock_timestamp(),
@@ -96,7 +91,7 @@ class PostgresFencedLeaseStore:
                     f"""
                     SELECT worker_id, fencing_token, acquired_at, expires_at,
                            clock_timestamp() AS database_now
-                    FROM {POSTGRES_SCHEMA}.worker_leases
+                    FROM {postgres_db.POSTGRES_SCHEMA}.worker_leases
                     WHERE lease_name = %s
                     FOR UPDATE
                     """,
@@ -117,7 +112,7 @@ class PostgresFencedLeaseStore:
                 )
                 updated = connection.execute(
                     f"""
-                    UPDATE {POSTGRES_SCHEMA}.worker_leases
+                    UPDATE {postgres_db.POSTGRES_SCHEMA}.worker_leases
                     SET worker_id = %s,
                         fencing_token = %s,
                         acquired_at = CASE
@@ -157,7 +152,7 @@ class PostgresFencedLeaseStore:
                 f"""
                 SELECT worker_id, fencing_token, expires_at,
                        clock_timestamp() AS database_now
-                FROM {POSTGRES_SCHEMA}.worker_leases
+                FROM {postgres_db.POSTGRES_SCHEMA}.worker_leases
                 WHERE lease_name = %s
                 """,
                 (lease.lease_name,),
@@ -185,7 +180,7 @@ class PostgresFencedLeaseStore:
         try:
             cursor = connection.execute(
                 f"""
-                DELETE FROM {POSTGRES_SCHEMA}.worker_leases
+                DELETE FROM {postgres_db.POSTGRES_SCHEMA}.worker_leases
                 WHERE lease_name = %s AND worker_id = %s AND fencing_token = %s
                 """,
                 (self.LEASE_NAME, worker_id, token),
@@ -206,7 +201,7 @@ class PostgresFencedLeaseStore:
                 f"""
                 SELECT lease_name, worker_id, fencing_token, acquired_at, expires_at,
                        clock_timestamp() AS database_now
-                FROM {POSTGRES_SCHEMA}.worker_leases
+                FROM {postgres_db.POSTGRES_SCHEMA}.worker_leases
                 WHERE lease_name = %s
                 """,
                 (self.LEASE_NAME,),

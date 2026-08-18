@@ -10,12 +10,7 @@ from typing import Any
 
 from starlette.concurrency import run_in_threadpool
 
-from ballotproof.postgres_db import (
-    ConnectionFactory,
-    database_url_from_env,
-    POSTGRES_SCHEMA,
-    psycopg_connection_factory,
-)
+from ballotproof import postgres_db
 
 
 @dataclass(frozen=True)
@@ -61,21 +56,21 @@ class PostgresFixedWindowRateLimiter:
         self,
         database_url: str | None = None,
         *,
-        connection_factory: ConnectionFactory | None = None,
+        connection_factory: postgres_db.ConnectionFactory | None = None,
     ) -> None:
         if connection_factory is None:
-            connection_factory = psycopg_connection_factory(
-                database_url if database_url is not None else database_url_from_env()
+            connection_factory = postgres_db.psycopg_connection_factory(
+                database_url if database_url is not None else postgres_db.database_url_from_env()
             )
         self._connection_factory = connection_factory
 
     def initialize(self) -> None:
         connection = self._connection_factory()
         try:
-            connection.execute(f"CREATE SCHEMA IF NOT EXISTS {POSTGRES_SCHEMA}")
+            connection.execute(f"CREATE SCHEMA IF NOT EXISTS {postgres_db.POSTGRES_SCHEMA}")
             connection.execute(
                 f"""
-                CREATE TABLE IF NOT EXISTS {POSTGRES_SCHEMA}.api_rate_windows (
+                CREATE TABLE IF NOT EXISTS {postgres_db.POSTGRES_SCHEMA}.api_rate_windows (
                     scope_key TEXT NOT NULL,
                     window_started_at TIMESTAMPTZ NOT NULL,
                     request_count INTEGER NOT NULL CHECK (request_count > 0),
@@ -97,14 +92,14 @@ class PostgresFixedWindowRateLimiter:
         try:
             row = connection.execute(
                 f"""
-                INSERT INTO {POSTGRES_SCHEMA}.api_rate_windows (
+                INSERT INTO {postgres_db.POSTGRES_SCHEMA}.api_rate_windows (
                     scope_key, window_started_at, request_count
                 ) VALUES (
                     %s, date_trunc('minute', clock_timestamp()), 1
                 )
                 ON CONFLICT (scope_key, window_started_at)
                 DO UPDATE SET request_count =
-                    {POSTGRES_SCHEMA}.api_rate_windows.request_count + 1
+                    {postgres_db.POSTGRES_SCHEMA}.api_rate_windows.request_count + 1
                 RETURNING request_count,
                           EXTRACT(EPOCH FROM (
                               window_started_at + interval '1 minute' - clock_timestamp()
@@ -134,7 +129,7 @@ class PostgresFixedWindowRateLimiter:
         try:
             cursor = connection.execute(
                 f"""
-                DELETE FROM {POSTGRES_SCHEMA}.api_rate_windows
+                DELETE FROM {postgres_db.POSTGRES_SCHEMA}.api_rate_windows
                 WHERE window_started_at < clock_timestamp() - interval '1 day'
                 """
             )
