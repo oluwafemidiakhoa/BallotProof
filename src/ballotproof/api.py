@@ -34,6 +34,7 @@ from ballotproof.models import (
     SignedAttestation,
     ValidationReport,
 )
+from ballotproof.publication_api import router as publication_router
 from ballotproof.reconciliation import reconcile_totals
 from ballotproof.registry import (
     ElectionRegistryPayload,
@@ -62,16 +63,17 @@ SourceType = Literal[
 
 app = FastAPI(
     title="BallotProof API",
-    version="0.23.0",
+    version="0.25.0",
     description=(
         "Evidence-preserving primitives for election verification, including authenticated "
         "governance, versioned election registries, source acquisition, immutable evidence, "
-        "review, attestations, and replay."
+        "review, attestations, replay, publication, and observer transparency."
     ),
 )
 install_auth_middleware(app)
 app.include_router(auth_router)
 app.include_router(source_router)
+app.include_router(publication_router)
 
 
 @lru_cache
