@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ballotproof.org/schemas/evidence.schema.json",
+  "title": "BallotProof Evidence Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["evidence_id", "election_id", "polling_unit_code", "document_type", "source", "artifact"],
+  "properties": {
+    "evidence_id": { "type": "string", "minLength": 1 },
+    "election_id": { "type": "string", "minLength": 1 },
+    "polling_unit_code": { "type": "string", "minLength": 1 },
+    "document_type": { "type": "string", "enum": ["EC8A", "OTHER"] },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "source_type", "retrieved_at"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "source_type": { "type": "string", "enum": ["official_publication", "observer_capture", "party_agent_capture", "newsroom_capture", "other"] },
+        "source_url": { "type": ["string", "null"], "format": "uri" },
+        "retrieved_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "size_bytes", "version"],
+      "properties": {
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "size_bytes": { "type": "integer", "minimum": 1 },
+        "version": { "type": "integer", "minimum": 1 },
+        "media_type": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

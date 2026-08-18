@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ballotproof.org/schemas/discrepancy.schema.json",
+  "title": "BallotProof Discrepancy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["discrepancy_id", "candidate_id", "source_votes", "comparison_votes", "delta", "status"],
+  "properties": {
+    "discrepancy_id": { "type": "string", "minLength": 1 },
+    "candidate_id": { "type": "string", "minLength": 1 },
+    "source_votes": { "type": "integer", "minimum": 0 },
+    "comparison_votes": { "type": "integer", "minimum": 0 },
+    "delta": { "type": "integer" },
+    "status": { "type": "string", "enum": ["open", "explained", "resolved"] },
+    "explanation": { "type": ["string", "null"] }
+  }
+}

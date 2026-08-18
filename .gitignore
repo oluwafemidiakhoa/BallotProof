@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+.env
+.DS_Store
+node_modules/
+.next/
+out/
+coverage.xml
+htmlcov/
+.ballotproof-data/
