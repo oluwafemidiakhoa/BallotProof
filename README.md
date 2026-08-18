@@ -8,8 +8,10 @@ It is not an election authority, a winner-prediction system, or an AI judge. The
 
 ## Current capabilities
 
-- Content-addressed SHA-256 artifact storage.
-- Append-only SQLite evidence version history with hash chaining.
+- Content-addressed SHA-256 artifact storage with a production raw-object boundary.
+- SQLite development metadata stores plus an explicit PostgreSQL production application-store path designed for Neon.
+- S3 Object Lock support for independently retained raw evidence/source captures with COMPLIANCE retention and digest verification.
+- Append-only evidence version history with hash chaining.
 - Ed25519-signed attestations bound to exact evidence record hashes.
 - Evidence ingestion API with explicit source provenance.
 - Append-only OCR/vision extraction records with field-level confidence and model provenance.
@@ -44,9 +46,73 @@ pip install -e '.[dev]'
 uvicorn apps.api.main:app --reload
 ```
 
-Set `BALLOTPROOF_DATA_DIR` to choose where immutable objects and SQLite ledgers are stored. The default is `.ballotproof-data`.
+Set `BALLOTPROOF_DATA_DIR` to choose the local development data directory. The default is `.ballotproof-data`.
 
 Open `http://127.0.0.1:8000/docs` for the generated API explorer.
+
+## Production deployment: Neon + raw object storage
+
+BallotProof uses **Neon PostgreSQL for production metadata/application ledgers**. Raw evidence files and source-response bytes are deliberately kept outside PostgreSQL and are addressed by SHA-256 through the raw-object storage layer.
+
+Install PostgreSQL and S3 support when deploying the production path:
+
+```bash
+pip install -e '.[postgres,s3]'
+```
+
+Configure the production application store with your Neon connection string:
+
+```bash
+export BALLOTPROOF_PRIMARY_STORE=postgres
+export BALLOTPROOF_DATABASE_URL='postgresql://USER:PASSWORD@YOUR-NEON-HOST/DBNAME?sslmode=require'
+export BALLOTPROOF_DATA_DIR=/srv/ballotproof
+```
+
+`BALLOTPROOF_DATABASE_URL` is runtime-only. Do not commit the Neon credential, echo it into CI logs, or place it in checked-in manifests. Use your deployment platform's secret manager.
+
+For local compatibility, raw evidence/source objects can remain on a filesystem:
+
+```bash
+export BALLOTPROOF_RAW_OBJECT_BACKEND=filesystem
+export BALLOTPROOF_RAW_OBJECT_ROOT=/srv/ballotproof/raw-objects
+```
+
+For production multi-replica deployments, use an object-locked S3 bucket instead of a shared application filesystem:
+
+```bash
+export BALLOTPROOF_RAW_OBJECT_BACKEND=s3
+export BALLOTPROOF_RAW_S3_BUCKET=your-object-lock-enabled-bucket
+export BALLOTPROOF_RAW_S3_PREFIX=ballotproof
+export BALLOTPROOF_RAW_S3_RETENTION_DAYS=365
+export AWS_REGION=us-east-1
+```
+
+The S3 bucket must already have Versioning and Object Lock enabled. BallotProof requires COMPLIANCE retention, conditional put-if-absent semantics, and SHA-256 verification; it does not create or weaken bucket-retention policy automatically.
+
+The resulting production split is intentional:
+
+```text
+Neon PostgreSQL
+  -> registry/evidence metadata, attestations, extraction/review records, cutover state
+
+Immutable raw-object storage
+  -> original evidence bytes and governed source-response captures
+
+Signed releases + governed publication
+  -> independently reproducible public verification artifacts
+```
+
+Before switching an existing deployment from legacy `objects/` or `source_objects/` directories to S3, migrate every referenced object and independently verify its pinned SHA-256 and byte length. Do not delete legacy copies merely because the backend configuration changed.
+
+The production API entrypoint is:
+
+```bash
+uvicorn ballotproof.production_api:app --host 0.0.0.0 --port 8000
+```
+
+`GET /ready` reports the configured primary metadata store and raw-object backend. A successful readiness response does not claim that a historical object migration or Neon cutover has been completed; those remain explicit operational steps.
+
+See [`docs/POSTGRES_CUTOVER.md`](docs/POSTGRES_CUTOVER.md), [`docs/POSTGRES_RUNTIME.md`](docs/POSTGRES_RUNTIME.md), and [`docs/OBJECT_STORAGE_AND_OBSERVERS.md`](docs/OBJECT_STORAGE_AND_OBSERVERS.md).
 
 ### Public evidence workflow
 
@@ -128,31 +194,18 @@ pytest
 
 ## Roadmap
 
-Completed foundation:
+Completed foundation includes content-addressed evidence, hash-chained provenance, signed attestations/releases, replay and reconciliation, source governance and approval, worker fencing, immutable publication/witnessing, PostgreSQL application-store cutover, and the v0.28 raw-object storage boundary.
 
-1. Content-addressed artifact storage and evidence version history.
-2. Cryptographic provenance chaining and signed attestations.
-3. Evidence ingestion, extraction/review records, and polling-unit evidence retrieval.
-4. Public evidence explorer contract.
-5. Provider-neutral extraction adapter manifests.
-6. Single-edge and multi-level collation replay with conservative completeness propagation.
-7. Versioned election registry and registry-bound replay.
-8. Governed raw source capture with provenance receipts.
-9. Versioned source-policy ledger and enforced request reservations.
-10. Main API exposure for source-governance routes.
-11. Fixture-only INEC IReV source contract with a quarantined `review_required` policy.
-12. One-shot, dependency-injected source transport execution with immutable response capture.
-13. Automatic recurring acquisition plans, persistent run history, and worker execution.
-14. Pre-live network policy enforcement with execution-time stale-policy protection and direct reservation-to-receipt provenance.
+Current v0.28 work:
 
-Next:
+1. Keep Neon as the production PostgreSQL metadata/application store.
+2. Move original evidence/source bytes to independently retained object storage without changing their cryptographic identities.
+3. Wire production source-worker capture through the same raw-object backend.
+4. Add explicit legacy-object migration and equivalence tooling.
+5. Introduce a new versioned governed-publication format that explicitly binds the PostgreSQL release sidecar.
+6. Add production observability and ingress/WAF deployment guidance.
 
-1. Add a production worker entrypoint/process configuration with explicit transport registration and operational health reporting.
-2. Implement the first real network transport only for a source with an explicit machine-access contract. The transport must validate resolved IP addresses, keep redirects disabled, honor policy timeouts, and enforce response-size limits while streaming.
-3. Resolve IReV-specific Terms of Use, authentication, supported automated-access contract, and rate-limit expectations before any live IReV transport is enabled.
-4. Add downloadable Parquet/CSV/JSON snapshots and signed manifests.
-5. Add Merkle checkpoints and independent mirror verification.
-6. Add observer/PRVT integrations, authentication/RBAC, production storage, and operational security hardening.
+Live scheduled ingestion remains blocked for a source until its access/retention terms explicitly permit BallotProof-style immutable capture and the exact active source-policy snapshot has the required signed approval.
 
 ## License
 
