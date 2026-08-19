@@ -5,17 +5,12 @@ from pathlib import Path
 from typing import Any
 
 from ballotproof.postgres_leases import PostgresFencedLease, PostgresFencedLeaseStore
-from ballotproof.production_stores import ObjectBackedSourceCaptureStore
-from ballotproof.source_approval import ApprovalEnforcingAcquisitionWorker, SourceApprovalStore
-from ballotproof.source_automation import SourceAutomationStore
-from ballotproof.source_ingestion import SourceCaptureStore
-from ballotproof.source_policy import SourcePolicyStore
-from ballotproof.source_scheduler import SourceSchedulerStore
-from ballotproof.source_transport import (
-    SourceTransportExecutor,
-    TransportExecutionStatus,
-    TransportProvenance,
+from ballotproof.postgres_source_control import (
+    PostgresSourceControlStores,
+    PostgresSourceTransportExecutor,
 )
+from ballotproof.source_approval import ApprovalEnforcingAcquisitionWorker
+from ballotproof.source_transport import TransportExecutionStatus, TransportProvenance
 
 
 class FencingContext:
@@ -61,7 +56,7 @@ class ContextualFencedLeaseStore:
 
 
 class GuardedSchedulerStore:
-    def __init__(self, store: SourceSchedulerStore, context: FencingContext) -> None:
+    def __init__(self, store: Any, context: FencingContext) -> None:
         self.store = store
         self.context = context
 
@@ -74,7 +69,7 @@ class GuardedSchedulerStore:
 
 
 class GuardedAutomationStore:
-    def __init__(self, store: SourceAutomationStore, context: FencingContext) -> None:
+    def __init__(self, store: Any, context: FencingContext) -> None:
         self.store = store
         self.context = context
 
@@ -103,7 +98,7 @@ class GuardedAutomationStore:
 
 
 class GuardedCaptureStore:
-    def __init__(self, store: SourceCaptureStore, context: FencingContext) -> None:
+    def __init__(self, store: Any, context: FencingContext) -> None:
         self.store = store
         self.context = context
 
@@ -115,7 +110,7 @@ class GuardedCaptureStore:
         return getattr(self.store, name)
 
 
-class GuardedSourceTransportExecutor(SourceTransportExecutor):
+class GuardedSourceTransportExecutor(PostgresSourceTransportExecutor):
     def __init__(self, *args: Any, fencing_context: FencingContext, **kwargs: Any) -> None:
         self.fencing_context = fencing_context
         super().__init__(*args, **kwargs)
@@ -151,21 +146,32 @@ class PostgresFencedAcquisitionRuntime:
         self,
         root: str | Path,
         lease_store: PostgresFencedLeaseStore,
-        approval_store: SourceApprovalStore,
+        approval_store: Any,
+        *,
+        stores: PostgresSourceControlStores | None = None,
     ) -> None:
         self.context = FencingContext(lease_store)
         self.lease_store = ContextualFencedLeaseStore(lease_store, self.context)
-        policy_store = SourcePolicyStore(root)
-        scheduler_store = GuardedSchedulerStore(SourceSchedulerStore(root), self.context)
-        self.capture_store = GuardedCaptureStore(
-            ObjectBackedSourceCaptureStore(root),
-            self.context,
-        )
-        automation_store = GuardedAutomationStore(SourceAutomationStore(root), self.context)
+        if stores is None:
+            connection_factory = lease_store._connection_factory
+            stores = PostgresSourceControlStores(
+                root,
+                auth_store=getattr(approval_store, "auth_store", None),
+                connection_factory=connection_factory,
+            )
+        self.stores = stores
+        self.policy_store = stores.policy
+        self.scheduler_store = GuardedSchedulerStore(stores.scheduler, self.context)
+        policy_store = self.policy_store
+        scheduler_store = self.scheduler_store
+        self.capture_store = GuardedCaptureStore(stores.receipts, self.context)
+        self.automation_store = GuardedAutomationStore(stores.automation, self.context)
+        automation_store = self.automation_store
         executor = GuardedSourceTransportExecutor(
             root,
-            capture_store=self.capture_store,
+            capture_store=stores.receipts,
             policy_store=policy_store,
+            connection_factory=stores.transport._connection_factory,
             fencing_context=self.context,
         )
         self.acquisition_worker = ApprovalEnforcingAcquisitionWorker(

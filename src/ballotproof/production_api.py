@@ -7,9 +7,11 @@ from pathlib import Path
 from fastapi import HTTPException
 
 import ballotproof.api as core_api
+import ballotproof.auth_api as auth_api
 import ballotproof.source_api as source_api
 from ballotproof.edge_security import RequestBodyLimitMiddleware, max_request_body_bytes_from_env
 from ballotproof.postgres_application import PostgresEvidenceStore, PostgresRegistryStore
+from ballotproof.postgres_source_control import PostgresSourceControlStores
 from ballotproof.production_stores import (
     ObjectBackedEvidenceStore,
     ObjectBackedPostgresApplicationStore,
@@ -50,8 +52,20 @@ def get_postgres_application_store() -> ObjectBackedPostgresApplicationStore:
     )
 
 
+@lru_cache
+def get_postgres_source_control() -> PostgresSourceControlStores:
+    stores = PostgresSourceControlStores(
+        _data_root(),
+        auth_store=auth_api.get_auth_store(),
+        raw_store=get_raw_object_store(),
+    )
+    stores.initialize()
+    return stores
+
+
 def _install_primary_store() -> None:
     if _primary_store_backend() == "sqlite":
+
         @lru_cache
         def evidence_store() -> ObjectBackedEvidenceStore:
             return ObjectBackedEvidenceStore(
@@ -76,7 +90,31 @@ def _install_primary_store() -> None:
     core_api.get_registry_store = registry_store
 
 
-def _install_source_capture_store() -> None:
+def _install_source_stores() -> None:
+    if _primary_store_backend() == "postgres":
+
+        def policy_store():
+            return get_postgres_source_control().policy
+
+        def approval_store():
+            return get_postgres_source_control().approval
+
+        def capture_store():
+            return get_postgres_source_control().receipts
+
+        def scheduler_store():
+            return get_postgres_source_control().scheduler
+
+        def automation_store():
+            return get_postgres_source_control().automation
+
+        source_api.get_source_policy_store = policy_store
+        source_api.get_source_approval_store = approval_store
+        source_api.get_source_capture_store = capture_store
+        source_api.get_source_scheduler_store = scheduler_store
+        source_api.get_source_automation_store = automation_store
+        return
+
     @lru_cache
     def source_capture_store() -> ObjectBackedSourceCaptureStore:
         return ObjectBackedSourceCaptureStore(
@@ -103,7 +141,7 @@ def _install_edge_controls() -> None:
 
 
 _install_primary_store()
-_install_source_capture_store()
+_install_source_stores()
 _install_edge_controls()
 
 

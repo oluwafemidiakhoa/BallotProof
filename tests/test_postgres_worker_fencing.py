@@ -5,13 +5,18 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from ballotproof.postgres_leases import PostgresFencedLease
+from ballotproof.postgres_source_control import (
+    PostgresSourceAutomationStore,
+    PostgresSourcePolicyStore,
+    PostgresSourceReceiptStore,
+    PostgresSourceSchedulerStore,
+)
 from ballotproof.postgres_worker import (
     ContextualFencedLeaseStore,
     FencingContext,
     GuardedAutomationStore,
     PostgresFencedAcquisitionRuntime,
 )
-from ballotproof.production_stores import ObjectBackedSourceCaptureStore
 from ballotproof.source_approval import ApprovalEnforcingAcquisitionWorker
 
 
@@ -19,6 +24,7 @@ class _LeaseStore:
     def __init__(self) -> None:
         self.current = True
         self.released: list[str] = []
+        self._connection_factory = self._connect
         now = datetime.now(UTC)
         self.lease = PostgresFencedLease(
             worker_id="worker:one",
@@ -26,6 +32,10 @@ class _LeaseStore:
             acquired_at=now,
             expires_at=now + timedelta(minutes=5),
         )
+
+    @staticmethod
+    def _connect():
+        return None
 
     def try_acquire(self, worker_id: str, **kwargs):
         del worker_id, kwargs
@@ -88,22 +98,28 @@ def test_contextual_lease_store_clears_context_on_release() -> None:
 
 
 def test_fenced_runtime_preserves_source_approval_enforcement(tmp_path) -> None:
-    lease_store = _LeaseStore()
-    runtime = PostgresFencedAcquisitionRuntime(
-        tmp_path,
-        lease_store,
-        _ApprovalStore(),
-    )
-
-    assert isinstance(runtime.acquisition_worker, ApprovalEnforcingAcquisitionWorker)
-
-
-def test_fenced_runtime_uses_production_raw_object_capture(tmp_path) -> None:
     runtime = PostgresFencedAcquisitionRuntime(
         tmp_path,
         _LeaseStore(),
         _ApprovalStore(),
     )
 
-    assert isinstance(runtime.capture_store.store, ObjectBackedSourceCaptureStore)
-    assert runtime.acquisition_worker.capture_store is runtime.capture_store
+    assert isinstance(runtime.acquisition_worker, ApprovalEnforcingAcquisitionWorker)
+
+
+def test_fenced_runtime_uses_shared_postgres_source_control(tmp_path) -> None:
+    runtime = PostgresFencedAcquisitionRuntime(
+        tmp_path,
+        _LeaseStore(),
+        _ApprovalStore(),
+    )
+
+    assert isinstance(runtime.policy_store, PostgresSourcePolicyStore)
+    assert isinstance(runtime.scheduler_store.store, PostgresSourceSchedulerStore)
+    assert isinstance(runtime.capture_store.store, PostgresSourceReceiptStore)
+    assert isinstance(runtime.automation_store.store, PostgresSourceAutomationStore)
+    assert not (tmp_path / "source_policies.sqlite3").exists()
+    assert not (tmp_path / "source_scheduler.sqlite3").exists()
+    assert not (tmp_path / "source_automation.sqlite3").exists()
+    assert not (tmp_path / "source_receipts.sqlite3").exists()
+    assert not (tmp_path / "source_transport.sqlite3").exists()

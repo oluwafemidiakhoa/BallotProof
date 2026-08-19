@@ -15,9 +15,9 @@ from ballotproof.postgres_db import database_url_from_env
 from ballotproof.postgres_leases import PostgresFencedLeaseStore
 from ballotproof.postgres_release import build_postgres_release, verify_postgres_release
 from ballotproof.postgres_runtime import PostgresReleaseLedger
+from ballotproof.postgres_source_control import PostgresSourceControlStores
 from ballotproof.postgres_worker import PostgresFencedAcquisitionRuntime
 from ballotproof.rate_limit import PostgresFixedWindowRateLimiter
-from ballotproof.source_approval_auth import EnrolledSourceApprovalStore
 from ballotproof.source_worker import ProductionSourceWorker, TransportRegistry, WorkerStateStore
 
 
@@ -135,10 +135,12 @@ def _load_private_key(path: str | Path) -> Ed25519PrivateKey:
 def _initialize() -> None:
     ledger, leases, limiter = _runtime()
     application = _application(".ballotproof-data")
+    source_control = PostgresSourceControlStores(".ballotproof-data")
     ledger.initialize()
     leases.initialize()
     limiter.initialize()
     application.initialize()
+    source_control.initialize()
 
 
 def _run_fenced_worker(args: argparse.Namespace) -> int:
@@ -156,13 +158,15 @@ def _run_fenced_worker(args: argparse.Namespace) -> int:
 
     registry = TransportRegistry.from_specs(args.transport)
     auth_store = AuthStore(root)
-    approval_store = EnrolledSourceApprovalStore(root, auth_store=auth_store)
+    source_control = PostgresSourceControlStores(root, auth_store=auth_store)
+    source_control.initialize()
     lease_store = PostgresFencedLeaseStore(database_url_from_env())
     lease_store.initialize()
     runtime = PostgresFencedAcquisitionRuntime(
         root,
         lease_store,
-        approval_store,
+        source_control.approval,
+        stores=source_control,
     )
     worker = ProductionSourceWorker(
         root,
