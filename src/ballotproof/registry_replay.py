@@ -4,12 +4,15 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ballotproof.collation import (
     CollationInput,
-    CollationLevel,
     CollationReplayReport,
     CollationReplayRequest,
     replay_collation,
 )
-from ballotproof.registry import ElectionRegistrySnapshot, ElectionRegistryStore
+from ballotproof.registry import (
+    ElectionRegistrySnapshot,
+    ElectionRegistryStore,
+    RegistryProfileBinding,
+)
 
 
 class StrictModel(BaseModel):
@@ -36,6 +39,7 @@ class RegistryReplayReport(StrictModel):
     election_id: str
     registry_version: int
     registry_snapshot_hash: str
+    jurisdiction_profile: RegistryProfileBinding | None
     office_id: str
     registry_source_provider: str
     registry_source_retrieved_at: str
@@ -89,20 +93,9 @@ def replay_from_registry(
     if not child_ids:
         raise ValueError("Registry node has no expected child units")
 
-    level_map = {
-        "ward": CollationLevel.WARD,
-        "lga": CollationLevel.LGA,
-        "state": CollationLevel.STATE,
-        "constituency": CollationLevel.CONSTITUENCY,
-        "national": CollationLevel.NATIONAL,
-    }
-    level = level_map.get(node.unit_type)
-    if level is None:
-        raise ValueError("Polling-unit nodes cannot be replay aggregation parents")
-
     replay = replay_collation(
         CollationReplayRequest(
-            level=level,
+            level=node.unit_type,
             node_id=request.node_id,
             expected_unit_ids=child_ids,
             expected_candidate_ids=expected_candidate_ids,
@@ -114,6 +107,7 @@ def replay_from_registry(
         election_id=request.election_id,
         registry_version=snapshot.version,
         registry_snapshot_hash=snapshot.snapshot_hash,
+        jurisdiction_profile=snapshot.payload.jurisdiction_profile,
         office_id=request.office_id,
         registry_source_provider=snapshot.payload.source.provider,
         registry_source_retrieved_at=snapshot.payload.source.retrieved_at.isoformat(),
