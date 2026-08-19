@@ -112,6 +112,8 @@ class EvidenceVersion(StrictModel):
     filename: str | None = None
     observed_at: datetime
     stored_at: datetime
+    submitted_by_actor_id: str | None = Field(default=None, max_length=256)
+    submitted_by_key_id: str | None = Field(default=None, max_length=256)
     previous_record_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     record_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
@@ -144,6 +146,10 @@ class SignedAttestation(StrictModel):
     algorithm: Literal["Ed25519"] = "Ed25519"
     public_key_b64: str
     signature_b64: str
+    submitted_by_actor_id: str | None = Field(default=None, max_length=256)
+    submitted_by_key_id: str | None = Field(default=None, max_length=256)
+    attestation_key_id: str | None = Field(default=None, max_length=256)
+    attestation_key_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class ExtractionStatus(StrEnum):
@@ -183,6 +189,8 @@ class ExtractionSubmission(StrictModel):
 class ExtractionRecord(ExtractionSubmission):
     extraction_id: str
     stored_at: datetime
+    submitted_by_actor_id: str | None = Field(default=None, max_length=256)
+    submitted_by_key_id: str | None = Field(default=None, max_length=256)
 
 
 class ReviewDecision(StrEnum):
@@ -217,6 +225,7 @@ class ExtractionReview(ExtractionReviewSubmission):
     evidence_id: str
     evidence_version: Annotated[int, Field(ge=1)]
     stored_at: datetime
+    reviewer_key_id: str | None = Field(default=None, max_length=256)
 
 
 class EvidenceBundleItem(StrictModel):

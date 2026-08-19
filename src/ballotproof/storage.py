@@ -30,7 +30,7 @@ from ballotproof.write_barrier import ReleaseWriteBarrier
 
 def _record_hash_body(record: EvidenceVersion | dict[str, object]) -> dict[str, object]:
     if isinstance(record, EvidenceVersion):
-        return {
+        body: dict[str, object] = {
             "evidence_id": record.evidence_id,
             "election_id": record.election_id,
             "polling_unit_code": record.polling_unit_code,
@@ -45,6 +45,10 @@ def _record_hash_body(record: EvidenceVersion | dict[str, object]) -> dict[str, 
             "stored_at": record.stored_at.isoformat(),
             "previous_record_hash": record.previous_record_hash,
         }
+        if record.submitted_by_actor_id is not None or record.submitted_by_key_id is not None:
+            body["submitted_by_actor_id"] = record.submitted_by_actor_id
+            body["submitted_by_key_id"] = record.submitted_by_key_id
+        return body
     return record
 
 
@@ -89,6 +93,8 @@ class EvidenceStore:
                     filename TEXT,
                     observed_at TEXT NOT NULL,
                     stored_at TEXT NOT NULL,
+                    submitted_by_actor_id TEXT,
+                    submitted_by_key_id TEXT,
                     previous_record_hash TEXT,
                     record_hash TEXT NOT NULL UNIQUE,
                     PRIMARY KEY (evidence_id, version)
@@ -133,6 +139,18 @@ class EvidenceStore:
                 );
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(evidence_versions)").fetchall()
+            }
+            if "submitted_by_actor_id" not in columns:
+                connection.execute(
+                    "ALTER TABLE evidence_versions ADD COLUMN submitted_by_actor_id TEXT"
+                )
+            if "submitted_by_key_id" not in columns:
+                connection.execute(
+                    "ALTER TABLE evidence_versions ADD COLUMN submitted_by_key_id TEXT"
+                )
 
     def put_artifact(self, stream: BinaryIO, *, max_bytes: int | None = None) -> StoredArtifact:
         temp_path = self.root / f".incoming-{uuid4().hex}"
@@ -173,7 +191,11 @@ class EvidenceStore:
         media_type: str | None = None,
         filename: str | None = None,
         evidence_id: str | None = None,
+        submitted_by_actor_id: str | None = None,
+        submitted_by_key_id: str | None = None,
     ) -> EvidenceVersion:
+        if (submitted_by_actor_id is None) != (submitted_by_key_id is None):
+            raise ValueError("evidence writer actor_id and key_id must be provided together")
         now = datetime.now(UTC)
         with (
             self.write_barrier.hold(advance_generation=True),
@@ -197,7 +219,7 @@ class EvidenceStore:
                 version = int(previous["version"]) + 1
                 previous_record_hash = str(previous["record_hash"])
 
-            record_body = {
+            record_body: dict[str, object] = {
                 "evidence_id": evidence_id,
                 "election_id": election_id,
                 "polling_unit_code": polling_unit_code,
@@ -212,6 +234,9 @@ class EvidenceStore:
                 "stored_at": now.isoformat(),
                 "previous_record_hash": previous_record_hash,
             }
+            if submitted_by_actor_id is not None:
+                record_body["submitted_by_actor_id"] = submitted_by_actor_id
+                record_body["submitted_by_key_id"] = submitted_by_key_id
             record_hash = hash_record(_record_hash_body(record_body))
             record = EvidenceVersion(**record_body, record_hash=record_hash)
             connection.execute(
@@ -219,8 +244,9 @@ class EvidenceStore:
                 INSERT INTO evidence_versions (
                     evidence_id, version, election_id, polling_unit_code, document_type,
                     source_json, artifact_sha256, artifact_size_bytes, media_type, filename,
-                    observed_at, stored_at, previous_record_hash, record_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    observed_at, stored_at, submitted_by_actor_id, submitted_by_key_id,
+                    previous_record_hash, record_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     evidence_id,
@@ -235,6 +261,8 @@ class EvidenceStore:
                     filename,
                     observed_at.isoformat(),
                     now.isoformat(),
+                    submitted_by_actor_id,
+                    submitted_by_key_id,
                     previous_record_hash,
                     record_hash,
                 ),
@@ -281,6 +309,15 @@ class EvidenceStore:
 
     def add_attestation(self, attestation: SignedAttestation) -> None:
         payload = attestation.payload
+        if attestation.submitted_by_actor_id is not None:
+            if attestation.submitted_by_actor_id != payload.actor_id:
+                raise ValueError("authenticated attestation actor does not match payload actor")
+            if (
+                attestation.submitted_by_key_id is None
+                or attestation.attestation_key_id is None
+                or attestation.attestation_key_sha256 is None
+            ):
+                raise ValueError("authenticated attestation metadata is incomplete")
         with (
             self.write_barrier.hold(advance_generation=True),
             self._connect() as connection,
@@ -330,7 +367,11 @@ class EvidenceStore:
         fields: list[ExtractedField],
         status: ExtractionStatus = ExtractionStatus.MACHINE_EXTRACTED,
         supersedes_extraction_id: str | None = None,
+        submitted_by_actor_id: str | None = None,
+        submitted_by_key_id: str | None = None,
     ) -> ExtractionRecord:
+        if (submitted_by_actor_id is None) != (submitted_by_key_id is None):
+            raise ValueError("extraction writer actor_id and key_id must be provided together")
         with self.write_barrier.hold(advance_generation=True):
             evidence = self.get_version(evidence_id, evidence_version)
             if evidence.record_hash != record_hash:
@@ -356,6 +397,8 @@ class EvidenceStore:
                 fields=fields,
                 supersedes_extraction_id=supersedes_extraction_id,
                 stored_at=datetime.now(UTC),
+                submitted_by_actor_id=submitted_by_actor_id,
+                submitted_by_key_id=submitted_by_key_id,
             )
             with self._connect() as connection:
                 connection.execute(
@@ -399,7 +442,15 @@ class EvidenceStore:
         self,
         extraction_id: str,
         submission: ExtractionReviewSubmission,
+        *,
+        reviewer_id: str | None = None,
+        reviewer_key_id: str | None = None,
     ) -> ExtractionReview:
+        authoritative_reviewer = reviewer_id or submission.reviewer_id
+        if reviewer_id is not None and submission.reviewer_id != reviewer_id:
+            raise ValueError("reviewer_id does not match the authenticated identity")
+        if reviewer_id is not None and reviewer_key_id is None:
+            raise ValueError("authenticated extraction review requires reviewer_key_id")
         with self.write_barrier.hold(advance_generation=True):
             extraction = self.get_extraction(extraction_id)
             known_fields = {field.field_name for field in extraction.fields}
@@ -413,7 +464,8 @@ class EvidenceStore:
                 extraction_id=extraction_id,
                 evidence_id=extraction.evidence_id,
                 evidence_version=extraction.evidence_version,
-                reviewer_id=submission.reviewer_id,
+                reviewer_id=authoritative_reviewer,
+                reviewer_key_id=reviewer_key_id,
                 fields=submission.fields,
                 stored_at=datetime.now(UTC),
             )
@@ -506,6 +558,8 @@ class EvidenceStore:
             filename=row["filename"],
             observed_at=datetime.fromisoformat(row["observed_at"]),
             stored_at=datetime.fromisoformat(row["stored_at"]),
+            submitted_by_actor_id=row["submitted_by_actor_id"],
+            submitted_by_key_id=row["submitted_by_key_id"],
             previous_record_hash=row["previous_record_hash"],
             record_hash=row["record_hash"],
         )
