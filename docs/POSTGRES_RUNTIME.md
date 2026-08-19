@@ -27,7 +27,8 @@ Psycopg connection pool. `BALLOTPROOF_POSTGRES_POOL_MAX_SIZE` defaults to 8.
 ballotproof-postgres init
 ```
 
-This creates only the namespaced `ballotproof` schema and the v0.26 runtime tables.
+This creates the namespaced `ballotproof` schema and the PostgreSQL runtime, application, rate-limit,
+and source-control tables used by the production path.
 
 ## Release snapshots
 
@@ -49,8 +50,49 @@ procedures are proven.
 increasing fencing token whenever leadership changes after expiration. A stale holder can call
 `assert_current()` before committing protected work; a token that is no longer current is rejected.
 
-The existing worker constructor already accepts an injected lease store, so production deployment
-can supply `PostgresFencedLeaseStore` without changing acquisition logic.
+The production source worker combines that lease with the shared PostgreSQL source-control stores,
+so protected acquisition mutations are rejected when the worker no longer owns the current fencing
+token.
+
+## PostgreSQL source-control plane
+
+When `BALLOTPROOF_PRIMARY_STORE=postgres`, the production source API and fenced worker use PostgreSQL
+for the acquisition state that must be consistent across replicas:
+
+- append-only source-policy snapshots and their hash-chain heads;
+- signed source-approval events and approval-chain heads;
+- provenance receipt metadata used for retry decisions;
+- request reservations, duplicate-attempt prevention, backoff, and request-rate windows;
+- recurring acquisition plans and run history; and
+- transport execution claims that enforce consume-once reservation semantics.
+
+Raw source-response bytes do **not** move into PostgreSQL. `PostgresSourceReceiptStore` writes those
+bytes through the configured `RawObjectStore` and persists only the receipt metadata in PostgreSQL.
+For production this should remain an independently retained/object-locked raw-object backend.
+
+Policy and approval chain-head updates, plus scheduler reservation decisions, use per-source
+PostgreSQL advisory transaction locks. Duplicate reservations and transport claims also have database
+uniqueness constraints. Those controls make the coordination decisions shared across application and
+worker replicas rather than relying on host-local SQLite locks.
+
+The existing SQLite source stores remain available for development and compatibility mode. Switching
+a production deployment to PostgreSQL source control is an explicit cutover: initialize the schema,
+migrate or otherwise account for required historical control records, verify the active source
+policy/approval state, and only then direct production source-governance traffic at the shared store.
+This change does not claim that old SQLite control history was silently copied.
+
+### Authentication caveat
+
+The general `AuthStore` identity, API-key, approver-key enrollment, revocation, and auth-audit ledger
+is still SQLite-backed in this slice. PostgreSQL source approvals continue to consult that registry
+when deciding whether an approver key is currently active. Therefore operators must keep auth and
+approver-key mutation on one authoritative writer, or keep source-governance endpoints single-writer,
+until authentication state itself has a shared PostgreSQL implementation. This milestone must not be
+interpreted as making auth revocation replica-safe.
+
+The live-ingestion governance gate is unchanged: source access and immutable-retention terms still
+need to permit the intended capture, and the exact active source-policy snapshot still requires the
+configured signed approval before scheduled acquisition is allowed.
 
 ## API rate limits
 
