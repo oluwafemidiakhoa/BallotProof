@@ -95,6 +95,8 @@ class ElectionRegistrySnapshot(RegistryModel):
     version: Annotated[int, Field(ge=1)]
     payload: ElectionRegistryPayload
     stored_at: datetime
+    submitted_by_actor_id: str | None = Field(default=None, max_length=256)
+    submitted_by_key_id: str | None = Field(default=None, max_length=256)
     previous_snapshot_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     snapshot_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
@@ -121,12 +123,26 @@ class ElectionRegistryStore:
                     snapshot_id TEXT NOT NULL UNIQUE,
                     payload_json TEXT NOT NULL,
                     stored_at TEXT NOT NULL,
+                    submitted_by_actor_id TEXT,
+                    submitted_by_key_id TEXT,
                     previous_snapshot_hash TEXT,
                     snapshot_hash TEXT NOT NULL UNIQUE,
                     PRIMARY KEY (election_id, version)
                 )
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(registry_snapshots)").fetchall()
+            }
+            if "submitted_by_actor_id" not in columns:
+                connection.execute(
+                    "ALTER TABLE registry_snapshots ADD COLUMN submitted_by_actor_id TEXT"
+                )
+            if "submitted_by_key_id" not in columns:
+                connection.execute(
+                    "ALTER TABLE registry_snapshots ADD COLUMN submitted_by_key_id TEXT"
+                )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
@@ -141,9 +157,11 @@ class ElectionRegistryStore:
         version: int,
         payload: ElectionRegistryPayload,
         stored_at: datetime,
+        submitted_by_actor_id: str | None,
+        submitted_by_key_id: str | None,
         previous_snapshot_hash: str | None,
     ) -> dict[str, object]:
-        return {
+        body: dict[str, object] = {
             "snapshot_id": snapshot_id,
             "election_id": election_id,
             "version": version,
@@ -151,8 +169,20 @@ class ElectionRegistryStore:
             "stored_at": stored_at.isoformat(),
             "previous_snapshot_hash": previous_snapshot_hash,
         }
+        if submitted_by_actor_id is not None or submitted_by_key_id is not None:
+            body["submitted_by_actor_id"] = submitted_by_actor_id
+            body["submitted_by_key_id"] = submitted_by_key_id
+        return body
 
-    def append(self, payload: ElectionRegistryPayload) -> ElectionRegistrySnapshot:
+    def append(
+        self,
+        payload: ElectionRegistryPayload,
+        *,
+        submitted_by_actor_id: str | None = None,
+        submitted_by_key_id: str | None = None,
+    ) -> ElectionRegistrySnapshot:
+        if (submitted_by_actor_id is None) != (submitted_by_key_id is None):
+            raise ValueError("registry writer actor_id and key_id must be provided together")
         stored_at = datetime.now(UTC)
         with (
             self.write_barrier.hold(advance_generation=True),
@@ -175,19 +205,29 @@ class ElectionRegistryStore:
                 version=version,
                 payload=payload,
                 stored_at=stored_at,
+                submitted_by_actor_id=submitted_by_actor_id,
+                submitted_by_key_id=submitted_by_key_id,
                 previous_snapshot_hash=previous_hash,
             )
             snapshot_hash = hash_record(body)
             snapshot = ElectionRegistrySnapshot(
-                **body,
+                snapshot_id=snapshot_id,
+                election_id=payload.election_id,
+                version=version,
+                payload=payload,
+                stored_at=stored_at,
+                submitted_by_actor_id=submitted_by_actor_id,
+                submitted_by_key_id=submitted_by_key_id,
+                previous_snapshot_hash=previous_hash,
                 snapshot_hash=snapshot_hash,
             )
             connection.execute(
                 """
                 INSERT INTO registry_snapshots (
                     election_id, version, snapshot_id, payload_json, stored_at,
+                    submitted_by_actor_id, submitted_by_key_id,
                     previous_snapshot_hash, snapshot_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.election_id,
@@ -195,6 +235,8 @@ class ElectionRegistryStore:
                     snapshot_id,
                     payload.model_dump_json(),
                     stored_at.isoformat(),
+                    submitted_by_actor_id,
+                    submitted_by_key_id,
                     previous_hash,
                     snapshot_hash,
                 ),
@@ -227,6 +269,8 @@ class ElectionRegistryStore:
                     version=snapshot.version,
                     payload=snapshot.payload,
                     stored_at=snapshot.stored_at,
+                    submitted_by_actor_id=snapshot.submitted_by_actor_id,
+                    submitted_by_key_id=snapshot.submitted_by_key_id,
                     previous_snapshot_hash=snapshot.previous_snapshot_hash,
                 )
             )
@@ -254,6 +298,8 @@ class ElectionRegistryStore:
             version=row["version"],
             payload=ElectionRegistryPayload.model_validate_json(row["payload_json"]),
             stored_at=datetime.fromisoformat(row["stored_at"]),
+            submitted_by_actor_id=row["submitted_by_actor_id"],
+            submitted_by_key_id=row["submitted_by_key_id"],
             previous_snapshot_hash=row["previous_snapshot_hash"],
             snapshot_hash=row["snapshot_hash"],
         )

@@ -7,9 +7,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 
+from ballotproof.attestation_keys import get_attestation_key_store
+from ballotproof.attestation_keys import router as attestation_key_router
 from ballotproof.attestations import verify_attestation
+from ballotproof.auth import AuthenticatedPrincipal
 from ballotproof.auth_api import router as auth_router
 from ballotproof.auth_middleware import install_auth_middleware
 from ballotproof.collation import CollationReplayReport, CollationReplayRequest, replay_collation
@@ -72,6 +75,7 @@ app = FastAPI(
 )
 install_auth_middleware(app)
 app.include_router(auth_router)
+app.include_router(attestation_key_router)
 app.include_router(source_router)
 app.include_router(publication_router)
 
@@ -86,6 +90,13 @@ def get_store() -> EvidenceStore:
 def get_registry_store() -> ElectionRegistryStore:
     root = Path(os.environ.get("BALLOTPROOF_DATA_DIR", ".ballotproof-data"))
     return ElectionRegistryStore(root)
+
+
+def _authenticated_principal(request: Request) -> AuthenticatedPrincipal:
+    principal = getattr(request.state, "principal", None)
+    if not isinstance(principal, AuthenticatedPrincipal):
+        raise HTTPException(status_code=401, detail="Authenticated principal missing")
+    return principal
 
 
 @app.get("/health", tags=["system"])
@@ -136,8 +147,16 @@ def replay_registry_endpoint(request: RegistryReplayRequest) -> RegistryReplayRe
     response_model=ElectionRegistrySnapshot,
     tags=["registry"],
 )
-def append_registry_snapshot(payload: ElectionRegistryPayload) -> ElectionRegistrySnapshot:
-    return get_registry_store().append(payload)
+def append_registry_snapshot(
+    request: Request,
+    payload: ElectionRegistryPayload,
+) -> ElectionRegistrySnapshot:
+    principal = _authenticated_principal(request)
+    return get_registry_store().append(
+        payload,
+        submitted_by_actor_id=principal.actor_id,
+        submitted_by_key_id=principal.key_id,
+    )
 
 
 @app.get(
@@ -197,6 +216,7 @@ async def fingerprint_evidence(file: Annotated[UploadFile, File()]) -> EvidenceF
 
 @app.post("/v1/evidence/ingest", response_model=EvidenceVersion, tags=["evidence"])
 async def ingest_evidence(
+    request: Request,
     file: Annotated[UploadFile, File()],
     election_id: Annotated[str, Form(min_length=1, max_length=128)],
     polling_unit_code: Annotated[str, Form(min_length=1, max_length=128)],
@@ -207,6 +227,7 @@ async def ingest_evidence(
     source_url: Annotated[str | None, Form()] = None,
     evidence_id: Annotated[str | None, Form()] = None,
 ) -> EvidenceVersion:
+    principal = _authenticated_principal(request)
     store = get_store()
     try:
         await file.seek(0)
@@ -229,6 +250,8 @@ async def ingest_evidence(
             media_type=file.content_type,
             filename=file.filename,
             evidence_id=evidence_id,
+            submitted_by_actor_id=principal.actor_id,
+            submitted_by_key_id=principal.key_id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -267,7 +290,11 @@ def evidence_chain(evidence_id: str) -> ChainVerification:
 
 
 @app.post("/v1/extractions", response_model=ExtractionRecord, tags=["extraction"])
-def submit_extraction(submission: ExtractionSubmission) -> ExtractionRecord:
+def submit_extraction(
+    request: Request,
+    submission: ExtractionSubmission,
+) -> ExtractionRecord:
+    principal = _authenticated_principal(request)
     try:
         return get_store().add_extraction(
             evidence_id=submission.evidence_id,
@@ -277,6 +304,8 @@ def submit_extraction(submission: ExtractionSubmission) -> ExtractionRecord:
             fields=submission.fields,
             status=submission.status,
             supersedes_extraction_id=submission.supersedes_extraction_id,
+            submitted_by_actor_id=principal.actor_id,
+            submitted_by_key_id=principal.key_id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -290,11 +319,23 @@ def submit_extraction(submission: ExtractionSubmission) -> ExtractionRecord:
     tags=["extraction"],
 )
 def review_extraction(
+    request: Request,
     extraction_id: str,
     submission: ExtractionReviewSubmission,
 ) -> ExtractionReview:
+    principal = _authenticated_principal(request)
+    if submission.reviewer_id != principal.actor_id:
+        raise HTTPException(
+            status_code=403,
+            detail="reviewer_id must match the authenticated identity",
+        )
     try:
-        return get_store().add_extraction_review(extraction_id, submission)
+        return get_store().add_extraction_review(
+            extraction_id,
+            submission,
+            reviewer_id=principal.actor_id,
+            reviewer_key_id=principal.key_id,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -302,13 +343,39 @@ def review_extraction(
 
 
 @app.post("/v1/attestations", response_model=SignedAttestation, tags=["attestations"])
-def submit_attestation(attestation: SignedAttestation) -> SignedAttestation:
+def submit_attestation(
+    request: Request,
+    attestation: SignedAttestation,
+) -> SignedAttestation:
+    principal = _authenticated_principal(request)
+    if attestation.payload.actor_id != principal.actor_id:
+        raise HTTPException(
+            status_code=403,
+            detail="attestation actor_id must match the authenticated identity",
+        )
     if not verify_attestation(attestation):
         raise HTTPException(status_code=400, detail="Invalid Ed25519 attestation signature")
     try:
-        get_store().add_attestation(attestation)
+        key = get_attestation_key_store().active_binding(
+            actor_id=principal.actor_id,
+            public_key_b64=attestation.public_key_b64,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    bound_attestation = attestation.model_copy(
+        update={
+            "submitted_by_actor_id": principal.actor_id,
+            "submitted_by_key_id": principal.key_id,
+            "attestation_key_id": key.key_id,
+            "attestation_key_sha256": key.public_key_sha256,
+        }
+    )
+    try:
+        get_store().add_attestation(bound_attestation)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return attestation
+    return bound_attestation
