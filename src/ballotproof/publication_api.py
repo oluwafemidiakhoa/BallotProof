@@ -10,6 +10,12 @@ from pydantic import BaseModel, ConfigDict
 
 from ballotproof.auth import AuthenticatedPrincipal, Permission
 from ballotproof.auth_api import require_permission
+from ballotproof.credibility_passport import (
+    CredibilityPassportVerification,
+    PublishedCredibilityPassport,
+    load_credibility_passport,
+    verify_credibility_passport,
+)
 from ballotproof.object_storage import S3ObjectLockPublicationBackend
 from ballotproof.observer_pins import (
     ObserverPin,
@@ -50,6 +56,17 @@ def _fingerprints(name: str) -> set[str] | None:
         if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
             raise ValueError(f"{name} must contain comma-separated SHA-256 fingerprints")
     return values
+
+
+def _minimum_trusted_witness_keys() -> int:
+    raw = os.environ.get("BALLOTPROOF_MINIMUM_TRUSTED_WITNESS_KEYS", "1")
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("BALLOTPROOF_MINIMUM_TRUSTED_WITNESS_KEYS must be an integer") from exc
+    if value < 0:
+        raise ValueError("BALLOTPROOF_MINIMUM_TRUSTED_WITNESS_KEYS must be non-negative")
+    return value
 
 
 @lru_cache
@@ -123,6 +140,42 @@ def publication_verify(publication_sha256: str) -> GovernedPublicationVerificati
         publication_sha256,
         _publication_backend_or_503(),
         trusted,
+    )
+
+
+@router.get(
+    "/credibility-passports/{passport_sha256}",
+    response_model=PublishedCredibilityPassport,
+)
+def credibility_passport_record(passport_sha256: str) -> PublishedCredibilityPassport:
+    try:
+        return load_credibility_passport(passport_sha256, _publication_backend_or_503())
+    except (OSError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/credibility-passports/{passport_sha256}/verify",
+    response_model=CredibilityPassportVerification,
+)
+def credibility_passport_verify(passport_sha256: str) -> CredibilityPassportVerification:
+    try:
+        release_roots = _fingerprints("BALLOTPROOF_TRUSTED_RELEASE_SIGNER_SHA256")
+        witness_roots = _fingerprints("BALLOTPROOF_TRUSTED_WITNESS_SHA256")
+        minimum_witnesses = _minimum_trusted_witness_keys()
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not release_roots or not witness_roots:
+        raise HTTPException(
+            status_code=503,
+            detail="release-signer and witness trust roots must be configured",
+        )
+    return verify_credibility_passport(
+        passport_sha256,
+        _publication_backend_or_503(),
+        trusted_release_signer_sha256=release_roots,
+        trusted_witness_sha256=witness_roots,
+        minimum_trusted_witness_keys=minimum_witnesses,
     )
 
 
