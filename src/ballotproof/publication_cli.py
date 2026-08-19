@@ -6,6 +6,12 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
+from ballotproof.credibility_passport import (
+    build_credibility_passport,
+    create_v2_witness_statement,
+    publish_credibility_passport,
+    verify_credibility_passport,
+)
 from ballotproof.object_storage import (
     ReplicatedImmutablePublicationBackend,
     S3ObjectLockPublicationBackend,
@@ -33,11 +39,29 @@ def _add_data_dir(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_trusted_release_signers(parser: argparse.ArgumentParser) -> None:
+def _add_trusted_release_signers(
+    parser: argparse.ArgumentParser,
+    *,
+    required: bool = False,
+) -> None:
     parser.add_argument(
         "--trusted-signer-sha256",
         action="append",
+        required=required,
         help="Require the release signer to match this SHA-256 fingerprint; repeatable",
+    )
+
+
+def _add_trusted_witnesses(
+    parser: argparse.ArgumentParser,
+    *,
+    required: bool = False,
+) -> None:
+    parser.add_argument(
+        "--trusted-witness-sha256",
+        action="append",
+        required=required,
+        help="Trust this witness SHA-256 fingerprint; repeatable",
     )
 
 
@@ -56,6 +80,20 @@ def _trusted_signers(args) -> set[str] | None:
     return set(values) if values else None
 
 
+def _required_trusted_signers(args) -> set[str]:
+    values = _trusted_signers(args)
+    if not values:
+        raise ValueError("at least one trusted release signer is required")
+    return values
+
+
+def _required_trusted_witnesses(args) -> set[str]:
+    values = getattr(args, "trusted_witness_sha256", None)
+    if not values:
+        raise ValueError("at least one trusted witness is required")
+    return set(values)
+
+
 def _backend(args):
     if getattr(args, "mirror_root", None):
         return FilesystemImmutablePublicationBackend(args.mirror_root)
@@ -71,7 +109,7 @@ def _backend(args):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ballotproof-publication",
-        description="Publish, witness, replicate, and pin BallotProof release transparency objects",
+        description="Publish, witness, replicate, pin, and verify BallotProof transparency objects",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -88,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     witness_create = commands.add_parser(
         "witness-create",
-        help="Verify a publication and sign an independent witness statement",
+        help="Verify a v1 publication and sign an independent witness statement",
     )
     witness_create.add_argument("publication_sha256")
     witness_create.add_argument("--witness-id", required=True)
@@ -97,9 +135,20 @@ def build_parser() -> argparse.ArgumentParser:
     _add_backend(witness_create)
     _add_trusted_release_signers(witness_create)
 
+    witness_create_v2 = commands.add_parser(
+        "witness-create-v2",
+        help="Verify a PostgreSQL v2 publication and sign an independent witness statement",
+    )
+    witness_create_v2.add_argument("publication_sha256")
+    witness_create_v2.add_argument("--witness-id", required=True)
+    witness_create_v2.add_argument("--signing-key", required=True)
+    witness_create_v2.add_argument("--output", required=True)
+    _add_backend(witness_create_v2)
+    _add_trusted_release_signers(witness_create_v2, required=True)
+
     witness_verify = commands.add_parser("witness-verify", help="Verify a witness statement")
     witness_verify.add_argument("statement_file")
-    witness_verify.add_argument("--trusted-witness-sha256", action="append")
+    _add_trusted_witnesses(witness_verify)
 
     witness_publish = commands.add_parser(
         "witness-publish",
@@ -127,11 +176,39 @@ def build_parser() -> argparse.ArgumentParser:
     observer_list = commands.add_parser("observer-list", help="List durable observer pins")
     observer_list.add_argument("--observer-id")
     _add_data_dir(observer_list)
+
+    passport_publish = commands.add_parser(
+        "passport-publish",
+        help="Build and publish a deterministic Election Credibility Passport",
+    )
+    passport_publish.add_argument("publication_sha256")
+    passport_publish.add_argument("--minimum-trusted-witness-keys", type=int, default=1)
+    _add_data_dir(passport_publish)
+    _add_backend(passport_publish)
+    _add_trusted_release_signers(passport_publish, required=True)
+    _add_trusted_witnesses(passport_publish, required=True)
+
+    passport_verify = commands.add_parser(
+        "passport-verify",
+        help="Verify an Election Credibility Passport under local trust roots",
+    )
+    passport_verify.add_argument("passport_sha256")
+    passport_verify.add_argument("--minimum-trusted-witness-keys", type=int, default=1)
+    _add_backend(passport_verify)
+    _add_trusted_release_signers(passport_verify, required=True)
+    _add_trusted_witnesses(passport_verify, required=True)
     return parser
 
 
 def _load_statement(path: str | Path) -> SignedWitnessStatement:
     return SignedWitnessStatement.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+def _write_statement(path: str | Path, statement: SignedWitnessStatement) -> None:
+    Path(path).write_text(
+        json.dumps(statement.model_dump(mode="json"), sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def run_cli(argv: Sequence[str] | None = None) -> int:
@@ -170,10 +247,18 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
                 args.witness_id,
                 load_ed25519_private_key(args.signing_key),
             )
-            Path(args.output).write_text(
-                json.dumps(statement.model_dump(mode="json"), sort_keys=True) + "\n",
-                encoding="utf-8",
+            _write_statement(args.output, statement)
+            print(json.dumps(statement.model_dump(mode="json"), sort_keys=True))
+            return 0
+        if args.command == "witness-create-v2":
+            statement = create_v2_witness_statement(
+                args.publication_sha256,
+                _backend(args),
+                _required_trusted_signers(args),
+                args.witness_id,
+                load_ed25519_private_key(args.signing_key),
             )
+            _write_statement(args.output, statement)
             print(json.dumps(statement.model_dump(mode="json"), sort_keys=True))
             return 0
         if args.command == "witness-verify":
@@ -211,6 +296,29 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
             pins = ObserverPinStore(args.data_dir).pins(observer_id=args.observer_id)
             print(json.dumps([pin.model_dump(mode="json") for pin in pins], sort_keys=True))
             return 0
+        if args.command == "passport-publish":
+            backend = _backend(args)
+            passport = build_credibility_passport(
+                args.publication_sha256,
+                backend,
+                ObserverPinStore(args.data_dir),
+                trusted_release_signer_sha256=_required_trusted_signers(args),
+                trusted_witness_sha256=_required_trusted_witnesses(args),
+                minimum_trusted_witness_keys=args.minimum_trusted_witness_keys,
+            )
+            published = publish_credibility_passport(passport, backend)
+            print(json.dumps(published.model_dump(mode="json"), sort_keys=True))
+            return 0 if passport.status == "verified" else 1
+        if args.command == "passport-verify":
+            verification = verify_credibility_passport(
+                args.passport_sha256,
+                _backend(args),
+                trusted_release_signer_sha256=_required_trusted_signers(args),
+                trusted_witness_sha256=_required_trusted_witnesses(args),
+                minimum_trusted_witness_keys=args.minimum_trusted_witness_keys,
+            )
+            print(json.dumps(verification.model_dump(mode="json"), sort_keys=True))
+            return 0 if verification.valid else 1
     except (
         FileExistsError,
         KeyError,
