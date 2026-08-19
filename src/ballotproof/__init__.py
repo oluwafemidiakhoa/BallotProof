@@ -6,6 +6,15 @@ from ballotproof.aggregation_protocol import (
     AggregationRequest,
     replay_aggregation,
 )
+from ballotproof.contest_rules import (
+    ContestOutcomeReport,
+    ContestOutcomeRequest,
+    ContestOutcomeStatus,
+    ContestRule,
+    TabulationMethod,
+    contest_rule_fingerprint,
+    evaluate_contest_outcome,
+)
 from ballotproof.reconciliation import reconcile_totals
 from ballotproof.result_protocol import (
     ChoiceTotal,
@@ -21,8 +30,15 @@ __all__ = [
     "AggregationReport",
     "AggregationRequest",
     "ChoiceTotal",
+    "ContestOutcomeReport",
+    "ContestOutcomeRequest",
+    "ContestOutcomeStatus",
+    "ContestRule",
     "ResultRecord",
     "ResultValidationReport",
+    "TabulationMethod",
+    "contest_rule_fingerprint",
+    "evaluate_contest_outcome",
     "reconcile_totals",
     "replay_aggregation",
     "result_record_from_legacy_sheet",
