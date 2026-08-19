@@ -25,9 +25,13 @@ def make_snapshot(store: ElectionRegistryStore):
             provider="synthetic-registry",
             retrieved_at=datetime(2026, 8, 1, tzinfo=UTC),
         ),
-        offices=[RegistryOffice(office_id="GOV", name="Governor", level="state")],
+        offices=[
+            RegistryOffice(office_id="GOV", name="Governor", level="state"),
+            RegistryOffice(office_id="SEN", name="Senator", level="constituency"),
+        ],
         candidates=[
-            RegistryCandidate(candidate_id="A", office_id="GOV", name="A", party_id="PA")
+            RegistryCandidate(candidate_id="A", office_id="GOV", name="A", party_id="PA"),
+            RegistryCandidate(candidate_id="B", office_id="SEN", name="B", party_id="PB"),
         ],
         units=[
             RegistryUnit(unit_id="WARD-1", unit_type="ward"),
@@ -42,25 +46,25 @@ def make_snapshot(store: ElectionRegistryStore):
     return store.append(payload)
 
 
-def test_registry_bound_replay_derives_expected_children(tmp_path):
+def test_registry_bound_replay_derives_expected_children_and_candidates(tmp_path):
     store = ElectionRegistryStore(tmp_path)
     snapshot = make_snapshot(store)
-    report = replay_from_registry(
-        store,
-        RegistryReplayRequest(
-            election_id=snapshot.election_id,
-            registry_version=snapshot.version,
-            registry_snapshot_hash=snapshot.snapshot_hash,
-            node_id="WARD-1",
-            inputs=[
-                CollationInput(unit_id="PU-1", candidate_totals={"A": 10}),
-                CollationInput(unit_id="PU-2", candidate_totals={"A": 20}),
-            ],
-        ),
-    )
+    report = replay_from_registry(store, RegistryReplayRequest(
+        election_id=snapshot.election_id,
+        registry_version=snapshot.version,
+        registry_snapshot_hash=snapshot.snapshot_hash,
+        office_id="GOV",
+        node_id="WARD-1",
+        inputs=[
+            CollationInput(unit_id="PU-1", candidate_totals={"A": 10}),
+            CollationInput(unit_id="PU-2", candidate_totals={"A": 20}),
+        ],
+    ))
     assert report.replay.complete is True
     assert report.replay.expected_units == 2
+    assert report.replay.expected_candidate_ids == ["A"]
     assert report.replay.computed_totals == {"A": 30}
+    assert report.office_id == "GOV"
     assert report.registry_snapshot_hash == snapshot.snapshot_hash
 
 
@@ -68,30 +72,44 @@ def test_registry_bound_replay_rejects_wrong_snapshot_hash(tmp_path):
     store = ElectionRegistryStore(tmp_path)
     snapshot = make_snapshot(store)
     with pytest.raises(ValueError, match="snapshot_hash"):
-        replay_from_registry(
-            store,
-            RegistryReplayRequest(
-                election_id=snapshot.election_id,
-                registry_version=1,
-                registry_snapshot_hash="0" * 64,
-                node_id="WARD-1",
-                inputs=[],
-            ),
-        )
+        replay_from_registry(store, RegistryReplayRequest(
+            election_id=snapshot.election_id,
+            registry_version=1,
+            registry_snapshot_hash="0" * 64,
+            office_id="GOV",
+            node_id="WARD-1",
+            inputs=[],
+        ))
 
 
 def test_registry_bound_replay_reports_missing_registered_child(tmp_path):
     store = ElectionRegistryStore(tmp_path)
     snapshot = make_snapshot(store)
-    report = replay_from_registry(
-        store,
-        RegistryReplayRequest(
-            election_id=snapshot.election_id,
-            registry_version=1,
-            registry_snapshot_hash=snapshot.snapshot_hash,
-            node_id="WARD-1",
-            inputs=[CollationInput(unit_id="PU-1", candidate_totals={"A": 10})],
-        ),
-    )
+    report = replay_from_registry(store, RegistryReplayRequest(
+        election_id=snapshot.election_id,
+        registry_version=1,
+        registry_snapshot_hash=snapshot.snapshot_hash,
+        office_id="GOV",
+        node_id="WARD-1",
+        inputs=[CollationInput(unit_id="PU-1", candidate_totals={"A": 10})],
+    ))
     assert report.replay.complete is False
     assert report.replay.missing_unit_ids == ["PU-2"]
+
+
+def test_registry_bound_replay_is_scoped_to_requested_office(tmp_path):
+    store = ElectionRegistryStore(tmp_path)
+    snapshot = make_snapshot(store)
+    report = replay_from_registry(store, RegistryReplayRequest(
+        election_id=snapshot.election_id,
+        registry_version=snapshot.version,
+        registry_snapshot_hash=snapshot.snapshot_hash,
+        office_id="GOV",
+        node_id="WARD-1",
+        inputs=[
+            CollationInput(unit_id="PU-1", candidate_totals={"A": 10}),
+            CollationInput(unit_id="PU-2", candidate_totals={"A": 20}),
+        ],
+    ))
+    assert report.replay.expected_candidate_ids == ["A"]
+    assert "B" not in report.replay.expected_candidate_ids

@@ -20,6 +20,7 @@ class RegistryReplayRequest(StrictModel):
     election_id: str = Field(min_length=1, max_length=128)
     registry_version: int = Field(ge=1)
     registry_snapshot_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    office_id: str = Field(min_length=1, max_length=128)
     node_id: str = Field(min_length=1, max_length=256)
     inputs: list[CollationInput]
     declared_totals: dict[str, int] | None = None
@@ -35,6 +36,7 @@ class RegistryReplayReport(StrictModel):
     election_id: str
     registry_version: int
     registry_snapshot_hash: str
+    office_id: str
     registry_source_provider: str
     registry_source_retrieved_at: str
     replay: CollationReplayReport
@@ -64,6 +66,18 @@ def replay_from_registry(
     request: RegistryReplayRequest,
 ) -> RegistryReplayReport:
     snapshot = _select_snapshot(store, request)
+    office_ids = {office.office_id for office in snapshot.payload.offices}
+    if request.office_id not in office_ids:
+        raise KeyError(f"Registry snapshot does not contain office_id: {request.office_id}")
+
+    expected_candidate_ids = sorted(
+        candidate.candidate_id
+        for candidate in snapshot.payload.candidates
+        if candidate.office_id == request.office_id
+    )
+    if not expected_candidate_ids:
+        raise ValueError("Registry office has no expected candidates")
+
     units = {unit.unit_id: unit for unit in snapshot.payload.units}
     node = units.get(request.node_id)
     if node is None:
@@ -91,6 +105,7 @@ def replay_from_registry(
             level=level,
             node_id=request.node_id,
             expected_unit_ids=child_ids,
+            expected_candidate_ids=expected_candidate_ids,
             inputs=request.inputs,
             declared_totals=request.declared_totals,
         )
@@ -99,6 +114,7 @@ def replay_from_registry(
         election_id=request.election_id,
         registry_version=snapshot.version,
         registry_snapshot_hash=snapshot.snapshot_hash,
+        office_id=request.office_id,
         registry_source_provider=snapshot.payload.source.provider,
         registry_source_retrieved_at=snapshot.payload.source.retrieved_at.isoformat(),
         replay=replay,
