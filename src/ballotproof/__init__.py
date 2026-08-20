@@ -15,6 +15,13 @@ from ballotproof.contest_rules import (
     contest_rule_fingerprint,
     evaluate_contest_outcome,
 )
+from ballotproof.evidence_origin import (
+    EvidenceOriginProof,
+    EvidenceOriginVerification,
+    build_evidence_origin_proof,
+    source_receipt_fingerprint,
+    verify_evidence_origin_proof,
+)
 from ballotproof.reconciliation import reconcile_totals
 from ballotproof.result_protocol import (
     ChoiceTotal,
@@ -34,15 +41,20 @@ __all__ = [
     "ContestOutcomeRequest",
     "ContestOutcomeStatus",
     "ContestRule",
+    "EvidenceOriginProof",
+    "EvidenceOriginVerification",
     "ResultRecord",
     "ResultValidationReport",
     "TabulationMethod",
+    "build_evidence_origin_proof",
     "contest_rule_fingerprint",
     "evaluate_contest_outcome",
     "reconcile_totals",
     "replay_aggregation",
     "result_record_from_legacy_sheet",
+    "source_receipt_fingerprint",
     "validate_result_record",
     "validate_result_sheet",
+    "verify_evidence_origin_proof",
 ]
 __version__ = "0.28.0"
