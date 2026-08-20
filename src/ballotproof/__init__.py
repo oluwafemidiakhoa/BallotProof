@@ -23,6 +23,17 @@ from ballotproof.evidence_origin import (
     verify_evidence_origin_proof,
 )
 from ballotproof.reconciliation import reconcile_totals
+from ballotproof.reproducibility import (
+    ContestRuleBinding,
+    EvidenceReproductionMaterial,
+    RawEvidenceObject,
+    ReproducibilityBundle,
+    ReproducibilityVerification,
+    VerificationArtifact,
+    build_reproducibility_bundle,
+    build_verification_artifact,
+    verify_reproducibility_bundle,
+)
 from ballotproof.result_protocol import (
     ChoiceTotal,
     ResultRecord,
@@ -50,17 +61,25 @@ __all__ = [
     "ContestOutcomeRequest",
     "ContestOutcomeStatus",
     "ContestRule",
+    "ContestRuleBinding",
     "EvidenceOriginProof",
     "EvidenceOriginVerification",
+    "EvidenceReproductionMaterial",
     "GossipObservation",
     "GossipStatus",
     "GossipView",
+    "RawEvidenceObject",
+    "ReproducibilityBundle",
+    "ReproducibilityVerification",
     "ResultRecord",
     "ResultValidationReport",
     "TabulationMethod",
     "TransparencyGossipReport",
     "TrustedObserver",
+    "VerificationArtifact",
     "build_evidence_origin_proof",
+    "build_reproducibility_bundle",
+    "build_verification_artifact",
     "contest_rule_fingerprint",
     "evaluate_contest_outcome",
     "evaluate_transparency_gossip",
@@ -71,6 +90,7 @@ __all__ = [
     "validate_result_record",
     "validate_result_sheet",
     "verify_evidence_origin_proof",
+    "verify_reproducibility_bundle",
     "verify_transparency_gossip_report",
 ]
 __version__ = "0.28.0"
