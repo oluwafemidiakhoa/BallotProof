@@ -10,13 +10,13 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from ballotproof.auth import AuthStore
+from ballotproof.governed_postgres_source_control import GovernedPostgresSourceControlStores
 from ballotproof.postgres_application import PostgresApplicationStore
 from ballotproof.postgres_db import database_url_from_env, psycopg_connection_factory
 from ballotproof.postgres_leases import PostgresFencedLeaseStore
 from ballotproof.postgres_release import build_postgres_release, verify_postgres_release
 from ballotproof.postgres_runtime import PostgresReleaseLedger
 from ballotproof.postgres_schema import PostgresSchemaStatus, inspect_application_schema
-from ballotproof.postgres_source_control import PostgresSourceControlStores
 from ballotproof.postgres_worker import PostgresFencedAcquisitionRuntime
 from ballotproof.rate_limit import PostgresFixedWindowRateLimiter
 from ballotproof.source_worker import ProductionSourceWorker, TransportRegistry, WorkerStateStore
@@ -32,6 +32,10 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "schema-status",
         help="Inspect the registered PostgreSQL application schema contract without changing it.",
+    )
+    subparsers.add_parser(
+        "source-schema-status",
+        help="Inspect the registered PostgreSQL source-control schema without changing it.",
     )
 
     sync = subparsers.add_parser(
@@ -144,6 +148,15 @@ def _schema_status() -> PostgresSchemaStatus:
         connection.close()
 
 
+def _source_control(
+    data_dir: str | Path = ".ballotproof-data",
+) -> GovernedPostgresSourceControlStores:
+    return GovernedPostgresSourceControlStores(
+        Path(data_dir),
+        database_url=database_url_from_env(),
+    )
+
+
 def _load_private_key(path: str | Path) -> Ed25519PrivateKey:
     value = serialization.load_pem_private_key(Path(path).read_bytes(), password=None)
     if not isinstance(value, Ed25519PrivateKey):
@@ -154,7 +167,7 @@ def _load_private_key(path: str | Path) -> Ed25519PrivateKey:
 def _initialize() -> None:
     ledger, leases, limiter = _runtime()
     application = _application(".ballotproof-data")
-    source_control = PostgresSourceControlStores(".ballotproof-data")
+    source_control = _source_control()
     ledger.initialize()
     leases.initialize()
     limiter.initialize()
@@ -167,9 +180,7 @@ def _run_fenced_worker(args: argparse.Namespace) -> int:
     if args.status:
         if args.once:
             raise ValueError("--status and --once cannot be combined")
-        report = WorkerStateStore(root).health(
-            stale_after_seconds=args.stale_after_seconds
-        )
+        report = WorkerStateStore(root).health(stale_after_seconds=args.stale_after_seconds)
         print(json.dumps(report.model_dump(mode="json"), sort_keys=True))
         return 0 if report.healthy else 1
     if not args.transport:
@@ -177,7 +188,7 @@ def _run_fenced_worker(args: argparse.Namespace) -> int:
 
     registry = TransportRegistry.from_specs(args.transport)
     auth_store = AuthStore(root)
-    source_control = PostgresSourceControlStores(root, auth_store=auth_store)
+    source_control = GovernedPostgresSourceControlStores(root, auth_store=auth_store)
     source_control.initialize()
     lease_store = PostgresFencedLeaseStore(database_url_from_env())
     lease_store.initialize()
@@ -226,6 +237,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "schema-status":
         status = _schema_status()
+        print(status.model_dump_json())
+        return 0 if status.compatible else 1
+    if args.command == "source-schema-status":
+        status = _source_control().schema_status()
         print(status.model_dump_json())
         return 0 if status.compatible else 1
     if args.command == "worker":

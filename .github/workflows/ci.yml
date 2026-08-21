@@ -51,7 +51,9 @@ jobs:
       - name: Install
         run: pip install -e '.[dev,postgres]'
       - name: PostgreSQL integration tests
-        run: pytest tests/test_postgres_integration.py
+        run: >-
+          pytest tests/test_postgres_integration.py
+          tests/test_postgres_source_schema_integration.py
 
   web:
     runs-on: ubuntu-latest
