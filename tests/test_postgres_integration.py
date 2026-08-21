@@ -7,7 +7,14 @@ from threading import Barrier
 
 import pytest
 
+from ballotproof.postgres_application import PostgresApplicationStore
 from ballotproof.postgres_leases import PostgresFencedLeaseStore
+from ballotproof.postgres_schema import (
+    APPLICATION_SCHEMA_CONTRACT_HASH,
+    APPLICATION_SCHEMA_VERSION,
+    PostgresSchemaState,
+    inspect_application_schema,
+)
 from ballotproof.postgres_source_control import (
     PostgresSourcePolicyStore,
     PostgresSourceSchedulerStore,
@@ -49,6 +56,14 @@ def _policy() -> SourcePolicy:
         terms_reviewed_at=datetime(2026, 8, 20, 12, tzinfo=UTC),
         requests_per_minute=4,
     )
+
+
+def _application_schema_status():
+    with psycopg.connect(
+        DATABASE_URL,
+        row_factory=psycopg_rows.dict_row,
+    ) as connection:
+        return inspect_application_schema(connection)
 
 
 def test_source_policy_versions_serialize_across_real_postgres_connections() -> None:
@@ -140,3 +155,74 @@ def test_worker_lease_takeover_increments_fencing_token() -> None:
     with pytest.raises(PermissionError, match="fencing token is stale"):
         first_store.assert_current(first)
     second_store.assert_current(second)
+
+
+def test_application_schema_bootstrap_registers_exact_contract(tmp_path) -> None:
+    store = PostgresApplicationStore(tmp_path, DATABASE_URL)
+
+    store.initialize()
+
+    status = _application_schema_status()
+    assert status.state is PostgresSchemaState.CURRENT
+    assert status.compatible is True
+    assert status.registered is True
+    assert status.installed_version == APPLICATION_SCHEMA_VERSION
+    assert status.installed_contract_hash == APPLICATION_SCHEMA_CONTRACT_HASH
+    assert store.readiness() is True
+
+
+def test_exact_legacy_application_schema_is_verified_before_adoption(tmp_path) -> None:
+    store = PostgresApplicationStore(tmp_path, DATABASE_URL)
+    store.initialize()
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        connection.execute("DROP TABLE ballotproof.schema_components")
+
+    legacy_status = _application_schema_status()
+    assert legacy_status.state is PostgresSchemaState.LEGACY_COMPATIBLE
+    assert legacy_status.compatible is True
+    assert legacy_status.registered is False
+    assert store.readiness() is False
+
+    store.initialize()
+
+    adopted = _application_schema_status()
+    assert adopted.state is PostgresSchemaState.CURRENT
+    assert adopted.installed_contract_hash == APPLICATION_SCHEMA_CONTRACT_HASH
+    assert store.readiness() is True
+
+
+def test_application_schema_drift_fails_closed(tmp_path) -> None:
+    store = PostgresApplicationStore(tmp_path, DATABASE_URL)
+    store.initialize()
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        connection.execute(
+            "ALTER TABLE ballotproof.application_records ADD COLUMN unexpected_value TEXT"
+        )
+
+    status = _application_schema_status()
+    assert status.state is PostgresSchemaState.INCOMPATIBLE
+    assert status.compatible is False
+    assert store.readiness() is False
+    with pytest.raises(RuntimeError, match="application schema is incompatible"):
+        store.initialize()
+
+
+def test_future_application_schema_version_fails_closed(tmp_path) -> None:
+    store = PostgresApplicationStore(tmp_path, DATABASE_URL)
+    store.initialize()
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        connection.execute(
+            """
+            UPDATE ballotproof.schema_components
+            SET schema_version = %s
+            WHERE component_name = 'application'
+            """,
+            (APPLICATION_SCHEMA_VERSION + 1,),
+        )
+
+    status = _application_schema_status()
+    assert status.state is PostgresSchemaState.FUTURE
+    assert status.compatible is False
+    assert store.readiness() is False
+    with pytest.raises(RuntimeError, match="application schema is future"):
+        store.initialize()
