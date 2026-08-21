@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
@@ -23,10 +23,16 @@ class RegistrySource(RegistryModel):
     source_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
+class RegistryProfileBinding(RegistryModel):
+    profile_id: str = Field(min_length=1, max_length=128)
+    profile_version: int = Field(ge=1)
+    profile_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class RegistryOffice(RegistryModel):
     office_id: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=256)
-    level: Literal["national", "state", "constituency", "local"]
+    level: str = Field(min_length=1, max_length=128)
 
 
 class RegistryCandidate(RegistryModel):
@@ -39,7 +45,7 @@ class RegistryCandidate(RegistryModel):
 
 class RegistryUnit(RegistryModel):
     unit_id: str = Field(min_length=1, max_length=128)
-    unit_type: Literal["polling_unit", "ward", "lga", "state", "constituency", "national"]
+    unit_type: str = Field(min_length=1, max_length=128)
     name: str | None = Field(default=None, max_length=256)
     parent_id: str | None = Field(default=None, max_length=128)
 
@@ -59,6 +65,7 @@ class ElectionRegistryPayload(RegistryModel):
     candidates: list[RegistryCandidate] = Field(default_factory=list)
     units: list[RegistryUnit] = Field(min_length=1)
     topology: list[RegistryTopologyEdge] = Field(default_factory=list)
+    jurisdiction_profile: RegistryProfileBinding | None = None
 
     @model_validator(mode="after")
     def validate_references(self) -> ElectionRegistryPayload:
@@ -87,6 +94,15 @@ class ElectionRegistryPayload(RegistryModel):
             if edge.parent_id == edge.child_id:
                 raise ValueError("Topology edge cannot self-reference")
         return self
+
+
+def registry_payload_hash_document(payload: ElectionRegistryPayload) -> dict[str, object]:
+    """Canonical registry payload representation with legacy hash compatibility."""
+
+    document = payload.model_dump(mode="json")
+    if payload.jurisdiction_profile is None:
+        document.pop("jurisdiction_profile", None)
+    return document
 
 
 class ElectionRegistrySnapshot(RegistryModel):
@@ -147,7 +163,7 @@ class ElectionRegistryStore:
             "snapshot_id": snapshot_id,
             "election_id": election_id,
             "version": version,
-            "payload": payload.model_dump(mode="json"),
+            "payload": registry_payload_hash_document(payload),
             "stored_at": stored_at.isoformat(),
             "previous_snapshot_hash": previous_snapshot_hash,
         }
@@ -179,7 +195,12 @@ class ElectionRegistryStore:
             )
             snapshot_hash = hash_record(body)
             snapshot = ElectionRegistrySnapshot(
-                **body,
+                snapshot_id=snapshot_id,
+                election_id=payload.election_id,
+                version=version,
+                payload=payload,
+                stored_at=stored_at,
+                previous_snapshot_hash=previous_hash,
                 snapshot_hash=snapshot_hash,
             )
             connection.execute(

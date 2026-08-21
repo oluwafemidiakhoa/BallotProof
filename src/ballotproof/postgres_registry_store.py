@@ -10,6 +10,7 @@ from ballotproof.registry import (
     ElectionRegistryPayload,
     ElectionRegistrySnapshot,
     RegistryChainVerification,
+    registry_payload_hash_document,
 )
 from ballotproof.releases import ReleaseRecord
 
@@ -19,7 +20,7 @@ def _registry_hash_body(snapshot: ElectionRegistrySnapshot) -> dict[str, object]
         "snapshot_id": snapshot.snapshot_id,
         "election_id": snapshot.election_id,
         "version": snapshot.version,
-        "payload": snapshot.payload.model_dump(mode="json"),
+        "payload": registry_payload_hash_document(snapshot.payload),
         "stored_at": snapshot.stored_at.isoformat(),
         "previous_snapshot_hash": snapshot.previous_snapshot_hash,
     }
