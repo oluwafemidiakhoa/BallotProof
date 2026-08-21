@@ -11,10 +11,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from ballotproof.auth import AuthStore
 from ballotproof.postgres_application import PostgresApplicationStore
-from ballotproof.postgres_db import database_url_from_env
+from ballotproof.postgres_db import database_url_from_env, psycopg_connection_factory
 from ballotproof.postgres_leases import PostgresFencedLeaseStore
 from ballotproof.postgres_release import build_postgres_release, verify_postgres_release
 from ballotproof.postgres_runtime import PostgresReleaseLedger
+from ballotproof.postgres_schema import PostgresSchemaStatus, inspect_application_schema
 from ballotproof.postgres_source_control import PostgresSourceControlStores
 from ballotproof.postgres_worker import PostgresFencedAcquisitionRuntime
 from ballotproof.rate_limit import PostgresFixedWindowRateLimiter
@@ -28,6 +29,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("init", help="Create all BallotProof PostgreSQL runtime tables.")
+    subparsers.add_parser(
+        "schema-status",
+        help="Inspect the registered PostgreSQL application schema contract without changing it.",
+    )
 
     sync = subparsers.add_parser(
         "snapshot-sync",
@@ -125,6 +130,20 @@ def _application(data_dir: str | Path) -> PostgresApplicationStore:
     return PostgresApplicationStore(Path(data_dir), database_url_from_env())
 
 
+def _schema_status() -> PostgresSchemaStatus:
+    factory = psycopg_connection_factory(database_url_from_env())
+    connection = factory()
+    try:
+        status = inspect_application_schema(connection)
+        connection.commit()
+        return status
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def _load_private_key(path: str | Path) -> Ed25519PrivateKey:
     value = serialization.load_pem_private_key(Path(path).read_bytes(), password=None)
     if not isinstance(value, Ed25519PrivateKey):
@@ -205,6 +224,10 @@ def main(argv: list[str] | None = None) -> int:
         _initialize()
         print(json.dumps({"initialized": True, "schema": "ballotproof"}))
         return 0
+    if args.command == "schema-status":
+        status = _schema_status()
+        print(status.model_dump_json())
+        return 0 if status.compatible else 1
     if args.command == "worker":
         try:
             return _run_fenced_worker(args)

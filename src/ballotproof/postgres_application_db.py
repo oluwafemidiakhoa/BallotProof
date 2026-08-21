@@ -11,6 +11,12 @@ from ballotproof.postgres_application_shared import (
     json_mapping,
     record_digest,
 )
+from ballotproof.postgres_schema import (
+    PostgresSchemaState,
+    inspect_application_schema,
+    register_application_schema,
+    require_application_schema_preflight,
+)
 from ballotproof.releases import ReleaseRecord
 
 
@@ -37,6 +43,7 @@ class PostgresApplicationDatabaseMixin:
     def initialize(self) -> None:
         connection = self._connection_factory()
         try:
+            require_application_schema_preflight(connection)
             connection.execute(f"CREATE SCHEMA IF NOT EXISTS {postgres_db.POSTGRES_SCHEMA}")
             connection.execute(
                 f"""
@@ -92,6 +99,7 @@ class PostgresApplicationDatabaseMixin:
                 )
                 """
             )
+            register_application_schema(connection)
             connection.commit()
         except Exception:
             connection.rollback()
@@ -102,14 +110,9 @@ class PostgresApplicationDatabaseMixin:
     def readiness(self) -> bool:
         connection = self._connection_factory()
         try:
-            connection.execute(
-                f"SELECT 1 FROM {postgres_db.POSTGRES_SCHEMA}.application_records LIMIT 0"
-            )
-            connection.execute(
-                f"SELECT 1 FROM {postgres_db.POSTGRES_SCHEMA}.application_cutovers LIMIT 0"
-            )
+            status = inspect_application_schema(connection)
             connection.commit()
-            return True
+            return status.state is PostgresSchemaState.CURRENT
         except Exception:
             connection.rollback()
             return False
