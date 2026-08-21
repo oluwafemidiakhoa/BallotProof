@@ -19,6 +19,11 @@ from ballotproof.postgres_source_control import (
     PostgresSourcePolicyStore,
     PostgresSourceSchedulerStore,
 )
+from ballotproof.postgres_worker_lease_schema import (
+    WORKER_LEASE_SCHEMA_CONTRACT_HASH,
+    WORKER_LEASE_SCHEMA_VERSION,
+    inspect_worker_lease_schema,
+)
 from ballotproof.source_ingestion import SourceAccessStatus, SourcePolicy
 from ballotproof.source_scheduler import ReservationBlockReason, SourceReservationRequest
 
@@ -64,6 +69,14 @@ def _application_schema_status():
         row_factory=psycopg_rows.dict_row,
     ) as connection:
         return inspect_application_schema(connection)
+
+
+def _worker_lease_schema_status():
+    with psycopg.connect(
+        DATABASE_URL,
+        row_factory=psycopg_rows.dict_row,
+    ) as connection:
+        return inspect_worker_lease_schema(connection)
 
 
 def test_source_policy_versions_serialize_across_real_postgres_connections() -> None:
@@ -155,6 +168,79 @@ def test_worker_lease_takeover_increments_fencing_token() -> None:
     with pytest.raises(PermissionError, match="fencing token is stale"):
         first_store.assert_current(first)
     second_store.assert_current(second)
+
+
+def test_worker_lease_schema_bootstrap_registers_exact_contract() -> None:
+    store = PostgresFencedLeaseStore(DATABASE_URL)
+
+    store.initialize()
+
+    status = _worker_lease_schema_status()
+    assert status.state is PostgresSchemaState.CURRENT
+    assert status.compatible is True
+    assert status.registered is True
+    assert status.installed_version == WORKER_LEASE_SCHEMA_VERSION
+    assert status.installed_contract_hash == WORKER_LEASE_SCHEMA_CONTRACT_HASH
+    assert store.readiness() is True
+
+
+def test_exact_legacy_worker_lease_schema_is_verified_before_adoption() -> None:
+    store = PostgresFencedLeaseStore(DATABASE_URL)
+    store.initialize()
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        connection.execute(
+            "DELETE FROM ballotproof.schema_components WHERE component_name = 'worker_lease'"
+        )
+
+    legacy_status = _worker_lease_schema_status()
+    assert legacy_status.state is PostgresSchemaState.LEGACY_COMPATIBLE
+    assert legacy_status.compatible is True
+    assert legacy_status.registered is False
+    assert store.readiness() is False
+
+    store.initialize()
+
+    adopted = _worker_lease_schema_status()
+    assert adopted.state is PostgresSchemaState.CURRENT
+    assert adopted.installed_contract_hash == WORKER_LEASE_SCHEMA_CONTRACT_HASH
+    assert store.readiness() is True
+
+
+def test_worker_lease_schema_drift_fails_closed() -> None:
+    store = PostgresFencedLeaseStore(DATABASE_URL)
+    store.initialize()
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        connection.execute(
+            "ALTER TABLE ballotproof.worker_leases ADD COLUMN unexpected_value TEXT"
+        )
+
+    status = _worker_lease_schema_status()
+    assert status.state is PostgresSchemaState.INCOMPATIBLE
+    assert status.compatible is False
+    assert store.readiness() is False
+    with pytest.raises(RuntimeError, match="worker-lease schema is incompatible"):
+        store.initialize()
+
+
+def test_future_worker_lease_schema_version_fails_closed() -> None:
+    store = PostgresFencedLeaseStore(DATABASE_URL)
+    store.initialize()
+    with psycopg.connect(DATABASE_URL, autocommit=True) as connection:
+        connection.execute(
+            """
+            UPDATE ballotproof.schema_components
+            SET schema_version = %s
+            WHERE component_name = 'worker_lease'
+            """,
+            (WORKER_LEASE_SCHEMA_VERSION + 1,),
+        )
+
+    status = _worker_lease_schema_status()
+    assert status.state is PostgresSchemaState.FUTURE
+    assert status.compatible is False
+    assert store.readiness() is False
+    with pytest.raises(RuntimeError, match="worker-lease schema is future"):
+        store.initialize()
 
 
 def test_application_schema_bootstrap_registers_exact_contract(tmp_path) -> None:

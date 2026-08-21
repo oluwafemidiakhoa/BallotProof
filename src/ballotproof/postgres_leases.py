@@ -6,6 +6,12 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from ballotproof import postgres_db
+from ballotproof.postgres_schema import PostgresSchemaState, PostgresSchemaStatus
+from ballotproof.postgres_worker_lease_schema import (
+    inspect_worker_lease_schema,
+    register_worker_lease_schema,
+    require_worker_lease_schema_preflight,
+)
 
 
 class PostgresLeaseModel(BaseModel):
@@ -36,9 +42,28 @@ class PostgresFencedLeaseStore:
         self._connection_factory = connection_factory
         self._held_tokens: dict[str, int] = {}
 
+    def schema_status(self) -> PostgresSchemaStatus:
+        connection = self._connection_factory()
+        try:
+            status = inspect_worker_lease_schema(connection)
+            connection.commit()
+            return status
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def readiness(self) -> bool:
+        try:
+            return self.schema_status().state is PostgresSchemaState.CURRENT
+        except Exception:
+            return False
+
     def initialize(self) -> None:
         connection = self._connection_factory()
         try:
+            require_worker_lease_schema_preflight(connection)
             connection.execute(f"CREATE SCHEMA IF NOT EXISTS {postgres_db.POSTGRES_SCHEMA}")
             connection.execute(
                 f"""
@@ -51,6 +76,7 @@ class PostgresFencedLeaseStore:
                 )
                 """
             )
+            register_worker_lease_schema(connection)
             connection.commit()
         except Exception:
             connection.rollback()
