@@ -20,6 +20,12 @@ class Severity(StrEnum):
     ERROR = "error"
 
 
+class EvidenceSufficiencyStatus(StrEnum):
+    VERIFIED = "verified"
+    INCOMPLETE = "incomplete"
+    FAILED = "failed"
+
+
 class CandidateVote(StrictModel):
     candidate_id: str = Field(min_length=1, max_length=128)
     candidate_name: str | None = Field(default=None, max_length=256)
@@ -34,6 +40,7 @@ class ResultSheet(StrictModel):
     valid_votes: NonNegativeInt | None = None
     rejected_votes: NonNegativeInt | None = None
     votes_cast: NonNegativeInt | None = None
+    expected_candidate_ids: list[str] | None = Field(default=None, min_length=1)
     candidate_votes: list[CandidateVote] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -41,6 +48,10 @@ class ResultSheet(StrictModel):
         candidate_ids = [entry.candidate_id for entry in self.candidate_votes]
         if len(candidate_ids) != len(set(candidate_ids)):
             raise ValueError("candidate_id values must be unique within a result sheet")
+        if self.expected_candidate_ids is not None and len(self.expected_candidate_ids) != len(
+            set(self.expected_candidate_ids)
+        ):
+            raise ValueError("expected_candidate_ids must be unique")
         return self
 
 
@@ -54,6 +65,7 @@ class ValidationFinding(StrictModel):
 
 class ValidationReport(StrictModel):
     polling_unit_code: str
+    status: EvidenceSufficiencyStatus
     passed: bool
     candidate_vote_sum: NonNegativeInt
     findings: list[ValidationFinding]
@@ -62,8 +74,17 @@ class ValidationReport(StrictModel):
 class ReconciliationRequest(StrictModel):
     source_label: str = Field(min_length=1, max_length=128)
     comparison_label: str = Field(min_length=1, max_length=128)
+    expected_candidate_ids: list[str] | None = Field(default=None, min_length=1)
     source_totals: dict[str, NonNegativeInt]
     comparison_totals: dict[str, NonNegativeInt]
+
+    @model_validator(mode="after")
+    def candidate_universe_is_unique(self) -> ReconciliationRequest:
+        if self.expected_candidate_ids is not None and len(self.expected_candidate_ids) != len(
+            set(self.expected_candidate_ids)
+        ):
+            raise ValueError("expected_candidate_ids must be unique")
+        return self
 
 
 class CandidateDifference(StrictModel):
@@ -76,7 +97,13 @@ class CandidateDifference(StrictModel):
 class ReconciliationReport(StrictModel):
     source_label: str
     comparison_label: str
+    status: EvidenceSufficiencyStatus
     matched: bool
+    expected_candidate_ids: list[str] | None
+    missing_source_candidate_ids: list[str]
+    missing_comparison_candidate_ids: list[str]
+    unexpected_source_candidate_ids: list[str]
+    unexpected_comparison_candidate_ids: list[str]
     differences: list[CandidateDifference]
 
 

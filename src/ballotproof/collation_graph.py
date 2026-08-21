@@ -9,6 +9,7 @@ from ballotproof.collation import (
     CollationReplayRequest,
     replay_collation,
 )
+from ballotproof.models import EvidenceSufficiencyStatus
 
 
 class StrictModel(BaseModel):
@@ -32,6 +33,7 @@ class CollationNodeSpec(StrictModel):
 
 class CollationGraphRequest(StrictModel):
     nodes: list[CollationNodeSpec] = Field(min_length=1)
+    expected_candidate_ids: list[str] | None = Field(default=None, min_length=1)
     leaf_totals: dict[str, dict[str, int]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -39,6 +41,10 @@ class CollationGraphRequest(StrictModel):
         node_ids = [node.node_id for node in self.nodes]
         if len(node_ids) != len(set(node_ids)):
             raise ValueError("collation node_id values must be unique")
+        if self.expected_candidate_ids is not None and len(self.expected_candidate_ids) != len(
+            set(self.expected_candidate_ids)
+        ):
+            raise ValueError("expected_candidate_ids must be unique")
         overlap = set(node_ids) & set(self.leaf_totals)
         if overlap:
             raise ValueError(f"node IDs cannot also be leaf IDs: {sorted(overlap)}")
@@ -56,6 +62,7 @@ class CollationGraphNodeReport(StrictModel):
 
 
 class CollationGraphReport(StrictModel):
+    status: EvidenceSufficiencyStatus
     complete: bool
     root_node_ids: list[str]
     unreferenced_leaf_ids: list[str]
@@ -87,7 +94,7 @@ def _assert_acyclic(nodes: list[CollationNodeSpec]) -> None:
 
 
 def replay_collation_graph(request: CollationGraphRequest) -> CollationGraphReport:
-    """Replay a DAG of collation edges while refusing to promote incomplete child nodes."""
+    """Replay a DAG while refusing to promote incomplete or failed child evidence."""
 
     specs = {node.node_id: node for node in request.nodes}
     reports: dict[str, CollationGraphNodeReport] = {}
@@ -113,7 +120,7 @@ def replay_collation_graph(request: CollationGraphRequest) -> CollationGraphRepo
                     )
                 elif child_id in reports:
                     child_report = reports[child_id].replay
-                    if child_report.complete:
+                    if child_report.status is EvidenceSufficiencyStatus.VERIFIED:
                         inputs.append(
                             CollationInput(
                                 unit_id=child_id,
@@ -128,6 +135,7 @@ def replay_collation_graph(request: CollationGraphRequest) -> CollationGraphRepo
                     level=spec.level,
                     node_id=spec.node_id,
                     expected_unit_ids=spec.expected_child_ids,
+                    expected_candidate_ids=request.expected_candidate_ids,
                     inputs=inputs,
                     declared_totals=spec.declared_totals,
                 )
@@ -148,8 +156,20 @@ def replay_collation_graph(request: CollationGraphRequest) -> CollationGraphRepo
     unreferenced_leaves = sorted(set(request.leaf_totals) - referenced_children)
     ordered_reports = [reports[node.node_id] for node in request.nodes]
 
+    if unreferenced_leaves or any(
+        item.replay.status is EvidenceSufficiencyStatus.FAILED for item in ordered_reports
+    ):
+        status = EvidenceSufficiencyStatus.FAILED
+    elif any(
+        item.replay.status is EvidenceSufficiencyStatus.INCOMPLETE for item in ordered_reports
+    ):
+        status = EvidenceSufficiencyStatus.INCOMPLETE
+    else:
+        status = EvidenceSufficiencyStatus.VERIFIED
+
     return CollationGraphReport(
-        complete=all(item.replay.complete for item in ordered_reports) and not unreferenced_leaves,
+        status=status,
+        complete=status is EvidenceSufficiencyStatus.VERIFIED,
         root_node_ids=root_ids,
         unreferenced_leaf_ids=unreferenced_leaves,
         node_reports=ordered_reports,
