@@ -8,6 +8,12 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from ballotproof import postgres_db
+from ballotproof.postgres_release_snapshot_schema import (
+    inspect_release_snapshot_schema,
+    register_release_snapshot_schema,
+    require_release_snapshot_schema_preflight,
+)
+from ballotproof.postgres_schema import PostgresSchemaState, PostgresSchemaStatus
 from ballotproof.provenance import canonical_json_bytes
 from ballotproof.releases import ReleaseRecord, collect_release_records
 from ballotproof.write_barrier import ReleaseWriteBarrier
@@ -60,9 +66,28 @@ class PostgresReleaseLedger:
             )
         self._connection_factory = connection_factory
 
+    def schema_status(self) -> PostgresSchemaStatus:
+        connection = self._connection_factory()
+        try:
+            status = inspect_release_snapshot_schema(connection)
+            connection.commit()
+            return status
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def readiness(self) -> bool:
+        try:
+            return self.schema_status().state is PostgresSchemaState.CURRENT
+        except Exception:
+            return False
+
     def initialize(self) -> None:
         connection = self._connection_factory()
         try:
+            require_release_snapshot_schema_preflight(connection)
             connection.execute(f"CREATE SCHEMA IF NOT EXISTS {postgres_db.POSTGRES_SCHEMA}")
             connection.execute(
                 f"""
@@ -98,6 +123,7 @@ class PostgresReleaseLedger:
                 )
                 """
             )
+            register_release_snapshot_schema(connection)
             connection.commit()
         except Exception:
             connection.rollback()
