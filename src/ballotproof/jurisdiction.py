@@ -27,6 +27,7 @@ class UnitRole(StrEnum):
 class ChoiceKind(StrEnum):
     CANDIDATE = "candidate"
     OPTION = "option"
+    PARTY_LIST = "party_list"
     MIXED = "mixed"
 
 
@@ -162,7 +163,7 @@ def validate_registry_against_profile(
     payload: ElectionRegistryPayload,
     profile: JurisdictionProfile,
 ) -> ElectionRegistryPayload:
-    """Validate registry vocabulary and topology roles without injecting local assumptions."""
+    """Validate registry vocabulary and contest semantics against one exact profile."""
 
     if payload.country_code.upper() != profile.country_code:
         raise ValueError(
@@ -170,10 +171,28 @@ def validate_registry_against_profile(
             f"{profile.country_code!r}"
         )
 
+    registry_scopes = (
+        {contest.scope for contest in payload.contests}
+        if payload.contests
+        else {office.level for office in payload.offices}
+    )
     known_scopes = set(profile.contest_scopes)
-    unknown_scopes = sorted({office.level for office in payload.offices} - known_scopes)
+    unknown_scopes = sorted(registry_scopes - known_scopes)
     if unknown_scopes:
         raise ValueError(f"Registry uses contest scopes not declared by profile: {unknown_scopes}")
+
+    if payload.contests:
+        contest_types = {item.contest_type: item for item in profile.contest_types}
+        for contest in payload.contests:
+            definition = contest_types.get(contest.contest_type)
+            if definition is None:
+                raise ValueError(
+                    f"Registry contest uses type not declared by profile: {contest.contest_type}"
+                )
+            if contest.choice_kind != definition.choice_kind.value:
+                raise ValueError(
+                    f"Registry contest {contest.contest_id} choice_kind does not match profile"
+                )
 
     unit_roles = {item.unit_type: item.role for item in profile.unit_types}
     unknown_unit_types = sorted({unit.unit_type for unit in payload.units} - set(unit_roles))

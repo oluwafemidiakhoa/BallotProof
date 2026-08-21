@@ -30,16 +30,40 @@ class RegistryProfileBinding(RegistryModel):
 
 
 class RegistryOffice(RegistryModel):
+    """Legacy candidate-election contest representation."""
+
     office_id: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=256)
     level: str = Field(min_length=1, max_length=128)
 
 
 class RegistryCandidate(RegistryModel):
+    """Legacy candidate representation retained for historical registry compatibility."""
+
     candidate_id: str = Field(min_length=1, max_length=128)
     office_id: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=256)
     party_id: str = Field(min_length=1, max_length=128)
+    ballot_label: str | None = Field(default=None, max_length=256)
+
+
+class RegistryContest(RegistryModel):
+    """Jurisdiction-neutral election contest declared by a profile-bound registry."""
+
+    contest_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=256)
+    scope: str = Field(min_length=1, max_length=128)
+    contest_type: str = Field(min_length=1, max_length=128)
+    choice_kind: str = Field(min_length=1, max_length=128)
+
+
+class RegistryChoice(RegistryModel):
+    """A selectable entity or option within one contest."""
+
+    choice_id: str = Field(min_length=1, max_length=128)
+    contest_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=256)
+    affiliation_id: str | None = Field(default=None, min_length=1, max_length=128)
     ballot_label: str | None = Field(default=None, max_length=256)
 
 
@@ -61,30 +85,59 @@ class ElectionRegistryPayload(RegistryModel):
     country_code: str = Field(min_length=2, max_length=3)
     election_date: datetime
     source: RegistrySource
-    offices: list[RegistryOffice] = Field(min_length=1)
+    offices: list[RegistryOffice] = Field(default_factory=list)
     candidates: list[RegistryCandidate] = Field(default_factory=list)
+    contests: list[RegistryContest] = Field(default_factory=list)
+    choices: list[RegistryChoice] = Field(default_factory=list)
     units: list[RegistryUnit] = Field(min_length=1)
     topology: list[RegistryTopologyEdge] = Field(default_factory=list)
     jurisdiction_profile: RegistryProfileBinding | None = None
 
     @model_validator(mode="after")
     def validate_references(self) -> ElectionRegistryPayload:
+        legacy_schema = bool(self.offices or self.candidates)
+        neutral_schema = bool(self.contests or self.choices)
+        if legacy_schema and neutral_schema:
+            raise ValueError(
+                "Registry cannot mix legacy office/candidate and contest/choice schemas"
+            )
+        if not legacy_schema and not neutral_schema:
+            raise ValueError("Registry must declare at least one office or contest")
+        if self.candidates and not self.offices:
+            raise ValueError("Candidates require legacy offices")
+        if self.choices and not self.contests:
+            raise ValueError("Choices require contests")
+
         office_ids = [item.office_id for item in self.offices]
+        contest_ids = [item.contest_id for item in self.contests]
         unit_ids = [item.unit_id for item in self.units]
         candidate_ids = [item.candidate_id for item in self.candidates]
+        choice_ids = [item.choice_id for item in self.choices]
         if len(office_ids) != len(set(office_ids)):
             raise ValueError("office_id values must be unique")
+        if len(contest_ids) != len(set(contest_ids)):
+            raise ValueError("contest_id values must be unique")
         if len(unit_ids) != len(set(unit_ids)):
             raise ValueError("unit_id values must be unique")
         if len(candidate_ids) != len(set(candidate_ids)):
             raise ValueError("candidate_id values must be unique")
+        if len(choice_ids) != len(set(choice_ids)):
+            raise ValueError("choice_id values must be unique")
+
         known_offices = set(office_ids)
+        known_contests = set(contest_ids)
         known_units = set(unit_ids)
         unknown_candidate_offices = sorted(
             {candidate.office_id for candidate in self.candidates} - known_offices
         )
         if unknown_candidate_offices:
             raise ValueError(f"Candidates reference unknown offices: {unknown_candidate_offices}")
+        unknown_choice_contests = sorted(
+            {choice.contest_id for choice in self.choices} - known_contests
+        )
+        if unknown_choice_contests:
+            raise ValueError(f"Choices reference unknown contests: {unknown_choice_contests}")
+
         for unit in self.units:
             if unit.parent_id is not None and unit.parent_id not in known_units:
                 raise ValueError(f"Unit {unit.unit_id} references unknown parent {unit.parent_id}")
@@ -97,11 +150,17 @@ class ElectionRegistryPayload(RegistryModel):
 
 
 def registry_payload_hash_document(payload: ElectionRegistryPayload) -> dict[str, object]:
-    """Canonical registry payload representation with legacy hash compatibility."""
+    """Canonical registry payload representation with legacy and neutral hash stability."""
 
     document = payload.model_dump(mode="json")
     if payload.jurisdiction_profile is None:
         document.pop("jurisdiction_profile", None)
+    if not payload.contests and not payload.choices:
+        document.pop("contests", None)
+        document.pop("choices", None)
+    if not payload.offices and not payload.candidates:
+        document.pop("offices", None)
+        document.pop("candidates", None)
     return document
 
 
