@@ -12,6 +12,8 @@ class StrictModel(BaseModel):
 
 
 class CollationLevel(StrEnum):
+    """Legacy convenience constants; the replay protocol accepts any jurisdiction level string."""
+
     WARD = "ward"
     LGA = "lga"
     STATE = "state"
@@ -38,7 +40,7 @@ class CandidateDelta(StrictModel):
 
 
 class CollationReplayRequest(StrictModel):
-    level: CollationLevel
+    level: str = Field(min_length=1, max_length=128)
     node_id: str = Field(min_length=1, max_length=256)
     expected_unit_ids: list[str] = Field(min_length=1)
     expected_candidate_ids: list[str] | None = Field(default=None, min_length=1)
@@ -62,7 +64,7 @@ class CollationReplayRequest(StrictModel):
 
 
 class CollationReplayReport(StrictModel):
-    level: CollationLevel
+    level: str
     node_id: str
     status: EvidenceSufficiencyStatus
     expected_units: int = Field(ge=0)
@@ -83,7 +85,7 @@ class CollationReplayReport(StrictModel):
 
 
 def replay_collation(request: CollationReplayRequest) -> CollationReplayReport:
-    """Reproduce one aggregation edge while making evidence sufficiency explicit."""
+    """Reproduce one jurisdiction-neutral aggregation edge with explicit sufficiency."""
 
     expected_units = set(request.expected_unit_ids)
     by_unit = {item.unit_id: item for item in request.inputs}

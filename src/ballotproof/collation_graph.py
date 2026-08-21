@@ -4,7 +4,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ballotproof.collation import (
     CollationInput,
-    CollationLevel,
     CollationReplayReport,
     CollationReplayRequest,
     replay_collation,
@@ -17,7 +16,7 @@ class StrictModel(BaseModel):
 
 
 class CollationNodeSpec(StrictModel):
-    level: CollationLevel
+    level: str = Field(min_length=1, max_length=128)
     node_id: str = Field(min_length=1, max_length=256)
     expected_child_ids: list[str] = Field(min_length=1)
     declared_totals: dict[str, int] | None = None
@@ -94,7 +93,7 @@ def _assert_acyclic(nodes: list[CollationNodeSpec]) -> None:
 
 
 def replay_collation_graph(request: CollationGraphRequest) -> CollationGraphReport:
-    """Replay a DAG while refusing to promote incomplete or failed child evidence."""
+    """Replay a jurisdiction-neutral DAG without promoting incomplete child evidence."""
 
     specs = {node.node_id: node for node in request.nodes}
     reports: dict[str, CollationGraphNodeReport] = {}
