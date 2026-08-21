@@ -6,7 +6,7 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ballotproof.provenance import hash_record
-from ballotproof.registry import ElectionRegistryPayload
+from ballotproof.registry import ElectionRegistryPayload, RegistryProfileBinding
 
 Identifier = Annotated[
     str,
@@ -196,3 +196,21 @@ def validate_registry_against_profile(
         )
 
     return payload
+
+
+def bind_registry_to_profile(
+    payload: ElectionRegistryPayload,
+    profile: JurisdictionProfile,
+) -> ElectionRegistryPayload:
+    """Validate and cryptographically bind a registry payload to one exact profile version."""
+
+    validate_registry_against_profile(payload, profile)
+    binding = RegistryProfileBinding(
+        profile_id=profile.profile_id,
+        profile_version=profile.profile_version,
+        profile_hash=profile_fingerprint(profile),
+    )
+    existing = payload.jurisdiction_profile
+    if existing is not None and existing != binding:
+        raise ValueError("Registry payload is already bound to a different jurisdiction profile")
+    return payload.model_copy(update={"jurisdiction_profile": binding})
