@@ -10,8 +10,8 @@ import ballotproof.api as core_api
 import ballotproof.auth_api as auth_api
 import ballotproof.source_api as source_api
 from ballotproof.edge_security import RequestBodyLimitMiddleware, max_request_body_bytes_from_env
+from ballotproof.governed_postgres_source_control import GovernedPostgresSourceControlStores
 from ballotproof.postgres_application import PostgresEvidenceStore, PostgresRegistryStore
-from ballotproof.postgres_source_control import PostgresSourceControlStores
 from ballotproof.production_stores import (
     ObjectBackedEvidenceStore,
     ObjectBackedPostgresApplicationStore,
@@ -53,14 +53,19 @@ def get_postgres_application_store() -> ObjectBackedPostgresApplicationStore:
 
 
 @lru_cache
-def get_postgres_source_control() -> PostgresSourceControlStores:
-    stores = PostgresSourceControlStores(
+def get_postgres_source_control() -> GovernedPostgresSourceControlStores:
+    stores = GovernedPostgresSourceControlStores(
         _data_root(),
         auth_store=auth_api.get_auth_store(),
         raw_store=get_raw_object_store(),
     )
     stores.initialize()
     return stores
+
+
+def _postgres_source_control_ready() -> bool:
+    stores = GovernedPostgresSourceControlStores(_data_root())
+    return stores.readiness()
 
 
 def _install_primary_store() -> None:
@@ -148,8 +153,14 @@ _install_edge_controls()
 @app.get("/ready", tags=["system"])
 def ready() -> dict[str, str]:
     backend = _primary_store_backend()
-    if backend == "postgres" and not get_postgres_application_store().readiness():
-        raise HTTPException(status_code=503, detail="PostgreSQL application store is not ready")
+    if backend == "postgres":
+        if not get_postgres_application_store().readiness():
+            raise HTTPException(status_code=503, detail="PostgreSQL application store is not ready")
+        if not _postgres_source_control_ready():
+            raise HTTPException(
+                status_code=503,
+                detail="PostgreSQL source-control store is not ready",
+            )
     raw_backend = os.environ.get("BALLOTPROOF_RAW_OBJECT_BACKEND", "filesystem").strip().lower()
     return {
         "status": "ready",
