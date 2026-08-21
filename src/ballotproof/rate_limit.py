@@ -11,6 +11,12 @@ from typing import Any
 from starlette.concurrency import run_in_threadpool
 
 from ballotproof import postgres_db
+from ballotproof.postgres_rate_limit_schema import (
+    inspect_rate_limit_schema,
+    register_rate_limit_schema,
+    require_rate_limit_schema_preflight,
+)
+from ballotproof.postgres_schema import PostgresSchemaState, PostgresSchemaStatus
 
 
 @dataclass(frozen=True)
@@ -64,9 +70,28 @@ class PostgresFixedWindowRateLimiter:
             )
         self._connection_factory = connection_factory
 
+    def schema_status(self) -> PostgresSchemaStatus:
+        connection = self._connection_factory()
+        try:
+            status = inspect_rate_limit_schema(connection)
+            connection.commit()
+            return status
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def readiness(self) -> bool:
+        try:
+            return self.schema_status().state is PostgresSchemaState.CURRENT
+        except Exception:
+            return False
+
     def initialize(self) -> None:
         connection = self._connection_factory()
         try:
+            require_rate_limit_schema_preflight(connection)
             connection.execute(f"CREATE SCHEMA IF NOT EXISTS {postgres_db.POSTGRES_SCHEMA}")
             connection.execute(
                 f"""
@@ -78,6 +103,7 @@ class PostgresFixedWindowRateLimiter:
                 )
                 """
             )
+            register_rate_limit_schema(connection)
             connection.commit()
         except Exception:
             connection.rollback()

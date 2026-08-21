@@ -54,6 +54,7 @@ jobs:
         run: >-
           pytest tests/test_postgres_integration.py
           tests/test_postgres_source_schema_integration.py
+          tests/test_postgres_rate_limit_schema.py
 
   web:
     runs-on: ubuntu-latest
